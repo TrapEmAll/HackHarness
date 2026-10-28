@@ -1,0 +1,7 @@
+# Copy to scope.yaml and replace these examples only with systems you own or
+# have explicit permission to assess.
+domains:
+  - "*.example.test"
+networks:
+  - "192.0.2.0/24"
+allow_localhost: true
