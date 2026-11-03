@@ -48,10 +48,14 @@ export class Store {
     this.event(engagement,"hypothesis.proposed",value,{claim}); return value;
   }
   setHypothesis(value, state) { this.db.prepare("UPDATE hypothesis SET state=? WHERE id=?").run(state,value); }
-  task(engagement, hypothesis, role, { actionKey, deadlineAt } = {}) {
+  task(engagement, hypothesis, role, { actionKey, deadlineAt, maxRunning } = {}) {
     const key = actionKey || `${hypothesis}:${role}`;
     const active = this.db.prepare("SELECT id FROM task WHERE engagement_id=? AND action_key=? AND state='running'").get(engagement,key);
     if (active) throw Object.assign(new Error(`Task ${active.id} already owns this action; cancel it before redispatching`), { code:"DEDUP", task_id: active.id });
+    if (maxRunning) {
+      const running = this.db.prepare("SELECT COUNT(*) AS n FROM task WHERE engagement_id=? AND state='running'").get(engagement).n;
+      if (running >= maxRunning) throw Object.assign(new Error(`Engagement is at its concurrency limit of ${maxRunning} running tasks`), { code:"CONCURRENCY" });
+    }
     const prior = this.db.prepare("SELECT COALESCE(MAX(attempt),0) AS attempt FROM task WHERE engagement_id=? AND action_key=?").get(engagement,key);
     const attempt = prior.attempt + 1;
     const value = id("T");

@@ -60,6 +60,10 @@ Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/
 
 `hh delegate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--model ALIAS]` runs the same authorization investigation through a real OMP worker instead of the CLI. The worker is spawned once per dispatch as `omp --mode rpc --no-session --no-ui --no-tools --no-extensions --trusted-extension packages/omp-adapter/index.ts` from a private scratch directory, with the engagement manifest path and data directory injected into its environment via the normal env vars. With `--no-tools` all built-in tools are disabled, so the worker's only capabilities are the `hh_*` tools in the allowlisted extension: it cannot reach the target except through the scoped gateway. Prompt completion follows omp's RPC contract — the `response` acknowledgment is acceptance, not completion; only a terminal `agent_end` (or a `prompt_result` with `agentInvoked: false`) completes a turn, and every unexpected exit becomes a failed attempt recorded on its task. Deadlines send RPC `abort` and then force exit after a grace period; worker cost is recorded from `get_session_stats` as worker.cost events when the session reports it.
 
+`hh verify MANIFEST FINDING [--model ALIAS]` delegates independent replay to a separate OMP worker under a `worker-replay:<finding>` lease: the worker's only applicable tool is `hh_replay`, success requires a verifier task created after the dispatch, and the resulting finding state (`independently_verified`/`stale`) is returned with the session cost. Verifier routing prefers `workers.routing.verifier`, falling back to `workers.routing.investigator`.
+
+`limits.concurrency` (default 2) caps simultaneously `running` tasks per engagement across all roles; further dispatches fail with `CONCURRENCY` until a task completes or is recovered. Each delegate counts its worker lease and the inner investigation as two of those slots while in flight.
+
 Manifest additions:
 
 ```json
@@ -94,8 +98,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow) and most of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery, bounded single-worker OMP dispatch over RPC with model routing and cost caps). Not yet implemented: multi-worker concurrency scheduling, verification through independent OMP workers, browser work, and benchmarks.
+Implemented from the release sequence: milestone 1 (one complete local workflow) and most of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery, engagement concurrency caps, bounded OMP worker dispatch for investigation and independent verification with model routing and cost caps). Not yet implemented: parallel worker pools with centralized scheduling, browser work, and benchmarks.
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons. Browser automation, state-changing playbooks, encrypted raw capture retention, autonomous OMP worker pools, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons, including OMP-worker delegation of both investigation and independent verification. Browser automation, state-changing playbooks, encrypted raw capture retention, multi-worker pools with centralized scheduling, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
