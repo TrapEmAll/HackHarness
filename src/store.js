@@ -19,6 +19,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS event (seq INTEGER PRIMARY KEY AUTOINCREMENT, engagement_id TEXT NOT NULL, type TEXT NOT NULL, object_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS observation (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, evidence_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
     `);
+    for (const [table, column, ddl] of [
+      ["task","action_key","ALTER TABLE task ADD COLUMN action_key TEXT"],
+      ["task","deadline_at","ALTER TABLE task ADD COLUMN deadline_at TEXT"],
+      ["task","cost_reserved","ALTER TABLE task ADD COLUMN cost_reserved REAL NOT NULL DEFAULT 0"],
+      ["engagement","cost_used","ALTER TABLE engagement ADD COLUMN cost_used REAL NOT NULL DEFAULT 0"],
+      ["engagement","cost_unknown","ALTER TABLE engagement ADD COLUMN cost_unknown INTEGER NOT NULL DEFAULT 0"],
+      ["engagement","reserved","ALTER TABLE engagement ADD COLUMN reserved REAL NOT NULL DEFAULT 0"],
+    ]) {
+      if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column)) this.db.exec(ddl);
+    }
   }
   close() { this.db.close(); }
   event(engagement, type, objectId, payload = {}) { this.db.prepare("INSERT INTO event(engagement_id,type,object_id,payload_json,created_at) VALUES(?,?,?,?,?)").run(engagement,type,objectId,json(payload),now()); }
@@ -37,8 +47,49 @@ export class Store {
     if (!result.changes) throw Object.assign(new Error("Request budget exhausted for target"), { code:"BUDGET" });
   }
   requestsUsed(engagement) { return this.db.prepare("SELECT COALESCE(SUM(requests_used),0) AS total FROM target_usage WHERE engagement_id=?").get(engagement).total; }
+  // Cross-worker cost enforcement: each dispatch reserves a slice of the
+  // engagement cap atomically and binds the reservation to its task row in the
+  // same transaction, so crashes and reconnects cannot orphan balances.
+  // Reported usage replaces the reservation; unknown usage retains it and is
+  // flagged. Recovery retains reservations as unknown cost.
+  reserveWorkerBudget(engagement, cap, desired, taskId) {
+    if (!Number.isFinite(cap)) {
+      if (taskId) this.db.prepare("UPDATE task SET cost_reserved=0 WHERE id=?").run(taskId);
+      return null;
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.engagement(engagement);
+      const remaining = cap - (row.cost_used || 0) - (row.reserved || 0);
+      if (remaining <= 0) throw Object.assign(new Error(`Worker cost budget exhausted (${row.cost_used} used + ${row.reserved} reserved of ${cap})`), { code: "BUDGET" });
+      const allocation = Math.min(remaining, Number.isFinite(desired) ? desired : remaining);
+      this.db.prepare("UPDATE engagement SET reserved=? WHERE id=?").run((row.reserved || 0) + allocation, engagement);
+      if (taskId) this.db.prepare("UPDATE task SET cost_reserved=? WHERE id=?").run(allocation, taskId);
+      return allocation;
+    } finally { this.db.exec("COMMIT"); }
+  }
+  settleTaskCost(taskId, cost, { released = false } = {}) {
+    const known = this.db.prepare("SELECT engagement_id FROM task WHERE id=?").get(taskId);
+    if (!known) return;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // reservation read inside the transaction: two connections can never
+      // both observe the same positive balance and charge it twice
+      const row = this.db.prepare("SELECT cost_reserved FROM task WHERE id=?").get(taskId);
+      if (!row || !(row.cost_reserved > 0)) return;
+      const reserved = row.cost_reserved;
+      if (released) {
+        this.db.prepare("UPDATE engagement SET reserved=MAX(reserved-?,0) WHERE id=?").run(reserved, known.engagement_id);
+      } else {
+        const reported = Number.isFinite(cost);
+        this.db.prepare("UPDATE engagement SET reserved=MAX(reserved-?,0), cost_used=cost_used+?, cost_unknown=cost_unknown+? WHERE id=?").run(reserved, reported ? cost : reserved, reported ? 0 : 1, known.engagement_id);
+      }
+      this.db.prepare("UPDATE task SET cost_reserved=0 WHERE id=?").run(taskId);
+    } finally { this.db.exec("COMMIT"); }
+  }
   recover(engagement) {
-    const running = this.db.prepare("SELECT id FROM task WHERE engagement_id=? AND state='running'").all(engagement);
+    const running = this.db.prepare("SELECT id, cost_reserved FROM task WHERE engagement_id=? AND state='running'").all(engagement);
+    for (const row of running) this.settleTaskCost(row.id, null);
     for (const row of running) this.db.prepare("UPDATE task SET state='interrupted',completed_at=? WHERE id=?").run(now(),row.id);
     if (running.length) this.event(engagement,"task.recovered",engagement,{interrupted:running.map(row=>row.id)});
     return running.length;

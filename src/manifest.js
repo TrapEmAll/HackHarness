@@ -38,6 +38,7 @@ export function loadManifest(file) {
     if (!Number.isFinite(limit) || limit <= 0) fail(`limits.${key} must be a positive number`, "MANIFEST");
   }
   if (value.limits.max_cost_usd !== undefined && !(Number.isFinite(value.limits.max_cost_usd) && value.limits.max_cost_usd > 0)) fail("limits.max_cost_usd must be a positive number", "MANIFEST");
+  if (value.limits.cost_reserve_usd !== undefined && !(Number.isFinite(value.limits.cost_reserve_usd) && value.limits.cost_reserve_usd > 0)) fail("limits.cost_reserve_usd must be a positive number", "MANIFEST");
   value.workers = { binary: process.env.HH_OMP || "omp", ...(value.workers || {}) };
   if (typeof value.workers.binary !== "string" || !value.workers.binary) fail("workers.binary must be a nonempty string", "MANIFEST");
   value.sources = (value.sources || []).map((source, index) => {
