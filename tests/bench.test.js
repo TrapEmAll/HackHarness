@@ -50,3 +50,23 @@ test("bench labels a read-only fixture honestly",async t=>{
   const summary=await bench("vulnerable",1);
   assert.equal(summary.fixture_is_read_only,true);
 });
+
+test("hh bench over the real CLI opens its derived engagement and completes a trial",async t=>{
+  const port=`44${++counter}`, child=await fixture("vulnerable",port); t.after(()=>child.kill());
+  const manifestOriginal=loadManifest(manifestPath).manifest; manifestOriginal.targets[0].origin=`http://127.0.0.1:${port}`;
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"hh-benchcli-")); t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  manifestOriginal.authorization.reference=path.resolve("examples/authorization.md");
+  const file=path.join(dir,"manifest.json"); fs.writeFileSync(file,JSON.stringify(manifestOriginal));
+  const out=await new Promise((resolve,reject)=>{
+    const proc=spawn(process.execPath,["src/cli.js","bench",file,"--mode","vulnerable","--data",path.join(dir,"data")],{cwd:process.cwd(),env:process.env,stdio:["ignore","pipe","pipe"]});
+    let stdout="",stderr=""; proc.stdout.on("data",c=>stdout+=c); proc.stderr.on("data",c=>stderr+=c);
+    proc.on("exit",code=>{
+      if(code!==0) return reject(new Error(`exit ${code}: ${stderr}`));
+      try { resolve(JSON.parse(stdout)); } catch(error){ reject(new Error(`unparsable stdout: ${stdout}`)); }
+    });
+  });
+  assert.equal(out.reproduced,1);
+  assert.equal(out.independently_verified,1);
+  assert.equal(out.requests_per_trial,4,"derived engagement must be open for budget accounting");
+  assert.ok(!out.rows.some(row=>row.error==="BUDGET"),"no unknown-engagement budget errors");
+});

@@ -2,6 +2,7 @@
 import { loadManifest } from "./manifest.js";
 import { Store } from "./store.js";
 import { runtime } from "./runtime.js";
+import path from "node:path";
 import { exportReport, investigateAuthorization, replayFinding, reviewFinding, delegateInvestigation, delegateReplay, autopilot, mapEngagement, benchmark } from "./workflow.js";
 import { json } from "./util.js";
 
@@ -27,7 +28,7 @@ async function main() {
     else if(command==="hypothesis") console.log(json({id:store.hypothesis(manifest.engagement,option(args,"--claim"),option(args,"--control"),option(args,"--check")),state:"proposed"}));
     else if(command==="hypotheses") console.log(json(store.list("hypothesis",manifest.engagement)));
     else if(command==="findings") console.log(json(store.list("finding",manifest.engagement).map(row=>({id:row.id,title:row.title,state:row.state,impact:row.impact,created_at:row.created_at,updated_at:row.updated_at}))));
-    else if(command==="bench") console.log(json(await benchmark(store,benchManifest(manifest,option(args,"--mode")),{path:option(args,"--path",false)||"/api/objects/a1",ownerIdentity:option(args,"--owner",false)||manifest.identities[0]?.id,otherIdentity:option(args,"--other",false)||manifest.identities[1]?.id,trials:Number(option(args,"--trials",false)||1)})));
+    else if(command==="bench") console.log(json(await benchmark(store,benchManifest(manifest,option(args,"--mode")),{path:option(args,"--path",false)||"/api/objects/a1",ownerIdentity:option(args,"--owner",false)||manifest.identities[0]?.id,otherIdentity:option(args,"--other",false)||manifest.identities[1]?.id,trials:Number(option(args,"--trials",false)||1),manifestPath:path.resolve(manifestPath)})));
     else if(command==="tasks") console.log(json(store.list("task",manifest.engagement).map(row=>({id:row.id,role:row.role,state:row.state,attempt:row.attempt,action_key:row.action_key,deadline_at:row.deadline_at,created_at:row.created_at,completed_at:row.completed_at}))));
     else if(command==="map") console.log(json(await mapEngagement(store,manifest,{identityId:option(args,"--identity",false)})));
     else if(command==="observations") console.log(json(store.list("observation",manifest.engagement).map(row=>({id:row.id,kind:row.kind,subject:row.subject,evidence_id:row.evidence_id,payload:JSON.parse(row.payload_json)}))));

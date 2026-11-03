@@ -164,10 +164,11 @@ export async function mapEngagement(store, manifest, { identityId, model } = {})
 // Deterministic benchmark of the authorization playbook against a labeled
 // fixture. It does NOT exercise the model planner; it measures the machinery:
 // supported findings, independent replay success, requests, time, scope burns.
-export async function benchmark(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, trials = 1 } = {}) {
+export async function benchmark(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, trials = 1, manifestPath } = {}) {
   if (!resourcePath || !ownerIdentity || !otherIdentity) throw Object.assign(new Error("benchmark requires --path --owner --other"), { code: "INVALID" });
   const rounds = Math.max(1, Math.round(trials));
   const engagement = manifest.engagement;
+  if (!store.engagement(engagement)) store.createEngagement(manifestPath || `${engagement}.json`, manifest);
   const startedAt = store.requestsUsed(engagement), startedMS = Date.now();
   let scopeViolations = 0, reproduced = 0, verified = 0;
   const rows = [];
