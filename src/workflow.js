@@ -1,6 +1,10 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { atomicWrite, json, now } from "./util.js";
 import { Gateway } from "./gateway.js";
+import { RpcWorker } from "./worker.js";
+
+export const HH_ADAPTER = fileURLToPath(new URL("../packages/omp-adapter/index.ts", import.meta.url));
 
 function compareOwnership(owner, other, ownerIdentity) {
   if (owner.status < 200 || owner.status >= 300) return {supported:false,reason:"Owner baseline did not succeed"};
@@ -34,6 +38,55 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
     const findingId=store.finding(manifest.engagement,hypothesisId,"Cross-identity object read",[owner.evidenceId,other.evidenceId],replay,result.reason,"reproduced");
     return {taskId,findingId,state:"reproduced",reason:result.reason,evidence:[owner.evidenceId,other.evidenceId]};
   } catch(error) { store.finishTask(taskId,"failed"); store.setHypothesis(hypothesisId,"inconclusive"); throw error; }
+}
+
+export async function delegateInvestigation(store, manifest, { hypothesisId, path: resourcePath, ownerIdentity, otherIdentity, model }) {
+  const hypothesis = store.db.prepare("SELECT * FROM hypothesis WHERE id=? AND engagement_id=?").get(hypothesisId, manifest.engagement);
+  if (!hypothesis) throw Object.assign(new Error("Hypothesis not found in engagement"), { code: "NOT_FOUND" });
+  const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
+  // Independent lease for the worker process; the inner hh_investigate_authorization
+  // call re-deduplicates on the normalized action it shares with direct runs.
+  const dispatchKey = `worker:${hypothesisId}:${resourcePath}:${ownerIdentity}:${otherIdentity}`;
+  const taskId = store.task(manifest.engagement, hypothesisId, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString() });
+  const modelAlias = model || manifest.workers.routing?.investigator;
+  const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
+  store.event(manifest.engagement, "worker.started", taskId, { hypothesis: hypothesisId, model: modelAlias || null, binary: manifest.workers.binary });
+  let outcome, result;
+  try {
+    await worker.start();
+    const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
+    const priorInvestigatorTasks = new Set(store.list("task", manifest.engagement).filter(row=>row.role==="investigator").map(row=>row.id));
+    const priorFindings = new Set(store.list("finding", manifest.engagement).map(row=>row.id));
+    const brief = [
+      `You are the HackHarness investigator for task ${taskId} in engagement ${manifest.engagement}.`,
+      `Use ONLY the provided hh_* tools; you have no other tools. Use no filesystem or network access except through them.`,
+      `Call hh_context. Then call hh_investigate_authorization exactly with: hypothesis_id=${hypothesisId}, path=${resourcePath}, owner_identity=${ownerIdentity}, other_identity=${otherIdentity}.`,
+      `Finish with one final line of JSON: {"taskId":"<id>","state":"<state>","findingId":"<id or null>"}.`,
+      `Claim: ${hypothesis.claim} Control: ${hypothesis.control}`,
+    ].join("\n");
+    result = await worker.prompt(brief, { timeoutMs });
+    const stats = await worker.stats();
+    if (stats?.cost !== undefined) store.event(manifest.engagement, "worker.cost", taskId, { cost: stats.cost, tokens: stats.tokens?.total });
+    if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`), { code: result.failure?.code || "WORKER" });
+    const inner = store.list("task", manifest.engagement).find(row=>row.role==="investigator" && !priorInvestigatorTasks.has(row.id));
+    const finding = store.list("finding", manifest.engagement).find(row=>!priorFindings.has(row.id));
+    if (!inner) throw Object.assign(new Error("Worker turn completed without creating an investigation task for its action"), { code: "WORKER" });
+    outcome = {
+      taskId, workerState: "completed", model: modelAlias || null,
+      innerTaskId: inner.id, finding: finding ? { id: finding.id, state: finding.state } : null,
+      cost: stats?.cost ?? null,
+    };
+    store.finishTask(taskId, "completed");
+    store.event(manifest.engagement, "worker.completed", taskId, { ...outcome, text: result.text });
+  } catch (error) {
+    store.finishTask(taskId, "failed");
+    store.event(manifest.engagement, "worker.failed", taskId, { error: error.message, code: error.code, text: result?.text });
+    outcome = { taskId, state: "failed", error: error.message, code: error.code || "WORKER" };
+    throw error;
+  } finally {
+    await worker.close();
+  }
+  return outcome;
 }
 
 export async function replayFinding(store,manifest,findingId) {
