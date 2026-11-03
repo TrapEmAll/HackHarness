@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 
 // Opts in to a real model call through the configured omp installation.
 // Run with: HH_OMP_TEST=1 HH_MANIFEST=examples/local-fixture.json npm test
@@ -9,7 +10,7 @@ else {
   test("live omp RPC answers a prompt with terminal completion", async t => {
     const { RpcWorker } = await import("../src/worker.js");
     assert.ok(process.env.HH_MANIFEST, "HH_MANIFEST must point at a manifest for the live run");
-    const worker = new RpcWorker({ extension: "packages/omp-adapter/index.ts" });
+    const worker = new RpcWorker({ extension: path.resolve("packages/omp-adapter/index.ts") });
     t.after(() => worker.close());
     await worker.start();
     const result = await worker.prompt("Reply with only the word ok", { timeoutMs: 120_000 });
@@ -20,11 +21,11 @@ else {
 
   test("live adapter registers only the reviewer-role tools under HH_ROLE=reviewer", async t => {
     const { RpcWorker } = await import("../src/worker.js");
-    const worker = new RpcWorker({ extension: "packages/omp-adapter/index.ts", env: { ...process.env, HH_ROLE: "reviewer" } });
+    const worker = new RpcWorker({ extension: path.resolve("packages/omp-adapter/index.ts"), env: { ...process.env, HH_ROLE: "reviewer" } });
     t.after(() => worker.close());
     await worker.start();
     const state = await worker.command({ type: "get_state" });
     const names = (state.dumpTools || []).map(row => row.name).filter(name => name.startsWith("hh")).sort();
-    assert.deepEqual(names, ["hh_context", "hh_evidence_read", "hh_findings"]);
+    assert.deepEqual(names, ["hh_context", "hh_evidence_read", "hh_findings", "hh_source_read"]);
   }, { timeout: 30_000 });
 }
