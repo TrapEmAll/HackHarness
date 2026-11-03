@@ -30,6 +30,16 @@ test("mapper records observations for vulnerable fixture with per-identity pools
   assert.equal(tasks.find(r=>r.role==="mapper").state,"completed");
 });
 
+test("mapper aborts discovery once the engagement wall-clock deadline passes",async t=>{
+  const port=`44${++counter}`, child=await fixture("vulnerable",port); t.after(()=>child.kill());
+  const manifest=loadManifest(manifestPath).manifest; manifest.targets[0].origin=`http://127.0.0.1:${port}`; manifest.engagement=`map-deadline-${counter}`;
+  manifest.limits.wall_clock_minutes=0.0002; // ~12ms: expires between setup and the first hop
+  await new Promise(r=>setTimeout(r,30));
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-mapd-"))); t.after(()=>store.close()); store.createEngagement(manifestPath,manifest);
+  await assert.rejects(()=>mapEngagement(store,manifest,{}),{code:"BUDGET"});
+  assert.equal(store.list("task",manifest.engagement).find(row=>row.role==="mapper").state,"failed");
+});
+
 test("mapper records authorization.denied observations on the fixed fixture",async t=>{
   const port=`44${++counter}`, child=await fixture("fixed",port); t.after(()=>child.kill());
   const manifest=loadManifest(manifestPath).manifest; manifest.targets[0].origin=`http://127.0.0.1:${port}`; manifest.engagement=`map-fixed-${counter}`;

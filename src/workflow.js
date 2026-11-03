@@ -126,8 +126,9 @@ function childPaths(json) {
 export async function mapEngagement(store, manifest, { identityId, model } = {}) {
   const identities = manifest.identities.filter(identity => !identityId || identity.id === identityId);
   if (!identities.length) throw Object.assign(new Error("No matching identity for mapping"), { code: "IDENTITY" });
-  const taskId = store.task(manifest.engagement, null, "mapper", { maxRunning: manifest.limits.concurrency });
-  const gateway = new Gateway(store, manifest);
+  const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
+  const taskId = store.task(manifest.engagement, null, "mapper", { maxRunning: manifest.limits.concurrency, deadlineAt: new Date(deadline).toISOString() });
+  const gateway = new Gateway(store, manifest); gateway.deadline = deadline;
   const probes = new Map(); // path -> { identityId: {evidence,status,marker} }
   const queue = [];
   for (const target of manifest.targets) for (const prefix of target.paths) queue.push(new URL(prefix, target.origin).href);
