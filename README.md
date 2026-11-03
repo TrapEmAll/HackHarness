@@ -66,6 +66,8 @@ Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/
 
 `limits.concurrency` (default 2) caps simultaneously `running` tasks per engagement across all roles; further dispatches fail with `CONCURRENCY` until a task completes or is recovered. Each delegate counts its worker lease and the inner investigation as two of those slots while in flight.
 
+`hh assess MANIFEST FINDING [--model ALIAS]` delegates the reviewer role — scope, impact, duplication, and report-quality assessment — to a read-only OMP worker under a `worker-review:<finding>` lease. The brief restricts it to `hh_evidence_read` and `hh_findings` (no target-facing tools); the turn is only successful if it ends with a parseable JSON verdict naming the finding, which lands as a `reviewer.assessment` event. The reviewer never mutates finding state: export still requires your explicit `hh review ... approve`. Routing prefers `workers.routing.reviewer`, then verifier, then investigator.
+
 Manifest additions:
 
 ```json
@@ -115,8 +117,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, source-assisted playbooks, reviewer workflow, and model-driven benchmark reporting (the deterministic fixture benchmark harness ships as `hh bench`; planner-quality measurements must be driven manually through `hh delegate`).
+Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, wave-scheduled autopilot, and the read-only reviewer — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, source-assisted playbooks, and model-driven benchmark reporting (the deterministic fixture benchmark harness ships as `hh bench`; planner-quality measurements must be driven manually through `hh delegate`).
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, the read-only mapper playbook, and the deterministic fixture benchmark harness. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, the read-only mapper playbook, reviewer-role assessments, and the deterministic fixture benchmark harness. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.

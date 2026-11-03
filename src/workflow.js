@@ -40,6 +40,49 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
   } catch(error) { store.finishTask(taskId,"failed"); store.setHypothesis(hypothesisId,"inconclusive"); throw error; }
 }
 
+// Reviewer playbook: scope, impact, duplication, report-quality assessment on
+// replicated evidence — read-only; the reviewer never changes finding state.
+export async function delegateReview(store, manifest, { findingId, model } = {}) {
+  const finding = store.findingById(findingId);
+  if (!finding || finding.engagement_id !== manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"), { code: "NOT_FOUND" });
+  if (!["reproduced","independently_verified"].includes(finding.state)) throw Object.assign(new Error(`Finding in state ${finding.state} is not ready for assessment`), { code: "STATE" });
+  const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
+  const dispatchKey = `worker-review:${findingId}`;
+  const taskId = store.task(manifest.engagement, finding.hypothesis_id, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
+  const modelAlias = model || manifest.workers.routing?.reviewer || manifest.workers.routing?.verifier || manifest.workers.routing?.investigator;
+  const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
+  store.event(manifest.engagement,"reviewer.started",taskId,{finding:findingId,model:modelAlias||null});
+  let result;
+  try {
+    await worker.start();
+    const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
+    const brief = [
+      `You are the HackHarness reviewer for finding ${findingId} in engagement ${manifest.engagement}.`,
+      `Use ONLY hh_* tools; you have no other tools. hh_evidence_read with each evidence id; hh_findings to check duplicates. Do not use target-facing tools like hh_replay (read-only assessment).`,
+      `Evidence ids: ${finding.evidence.join(", ")}. Claim: ${finding.title}. Impact: ${finding.impact}.`,
+      `Report exactly one final line of JSON: {"findingId":"${findingId}","scope_ok":true|false,"duplicate_of":"<finding id or null>","impact":true|false,"report_quality":"<pass|needs_work>","notes":"<short text>"}.`,
+    ].join("\n");
+    result = await worker.prompt(brief,{timeoutMs});
+    const stats=await worker.stats();
+    if (stats?.cost !== undefined) store.event(manifest.engagement,"worker.cost",taskId,{cost:stats.cost,tokens:stats.tokens?.total});
+    if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`),{code:result.failure?.code||"WORKER"});
+    const line=result.text.split(/\r?\n/).map(part=>part.trim()).filter(Boolean).pop();
+    let assessment; try { assessment=JSON.parse(line); } catch { throw Object.assign(new Error("Reviewer turn completed without a parseable final JSON verdict"), { code: "WORKER" }); }
+    if (assessment.findingId !== findingId || typeof assessment.scope_ok !== "boolean") throw Object.assign(new Error("Reviewer verdict did not reference the finding"), { code: "WORKER" });
+    const outcome={taskId, model: modelAlias||null, assessment, cost: stats?.cost ?? null};
+    store.event(manifest.engagement,"reviewer.assessment",findingId,{taskId,assessment});
+    store.finishTask(taskId,"completed");
+    store.event(manifest.engagement,"worker.completed",taskId,{...outcome,text:result.text});
+    return outcome;
+  } catch(error) {
+    store.finishTask(taskId,"failed");
+    store.event(manifest.engagement,"worker.failed",taskId,{error:error.message,code:error.code,text:result?.text});
+    throw error;
+  } finally {
+    await worker.close();
+  }
+}
+
 export async function delegateInvestigation(store, manifest, { hypothesisId, path: resourcePath, ownerIdentity, otherIdentity, model }) {
   const hypothesis = store.db.prepare("SELECT * FROM hypothesis WHERE id=? AND engagement_id=?").get(hypothesisId, manifest.engagement);
   if (!hypothesis) throw Object.assign(new Error("Hypothesis not found in engagement"), { code: "NOT_FOUND" });

@@ -56,6 +56,12 @@ export default function hackHarness(pi: ExtensionAPI): void {
 		async execute(_id, params, signal) { return content(await hh(["investigate",params.hypothesis_id,"--path",params.path,"--owner",params.owner_identity,"--other",params.other_identity], signal)); },
 	});
 	pi.registerTool({
+		name: "hh_findings", label: "List findings",
+		description: "List persisted findings with title, state, impact, and timestamps for duplication checks.",
+		parameters: z.object({}), approval: "read",
+		async execute(_id, _params, signal) { return content(await hh(["findings"], signal)); },
+	});
+	pi.registerTool({
 		name: "hh_replay", label: "Replay finding",
 		description: "Independently replay a candidate finding with fresh owner and negative-control captures.",
 		parameters: z.object({ finding_id:z.string() }), approval: "exec",
