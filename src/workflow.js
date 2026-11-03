@@ -1,10 +1,30 @@
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { atomicWrite, json, now } from "./util.js";
+import { atomicWrite, json, now, redactText, sha256 } from "./util.js";
 import { Gateway } from "./gateway.js";
+import { identitySecret } from "./manifest.js";
+import { resolveSourcePath } from "./policy.js";
 import { RpcWorker } from "./worker.js";
 
 export const HH_ADAPTER = fileURLToPath(new URL("../packages/omp-adapter/index.ts", import.meta.url));
+
+// Source-assisted planning: read files from manifest-declared read-only roots.
+// Content is identity-redacted before persistence; the artifact and observation
+// carry the digest for replay.
+export function readSource(store, manifest, { sourceId, path: relative } = {}) {
+  const source = (manifest.sources || []).find(entry => entry.id === sourceId);
+  if (!source) throw Object.assign(new Error(`No declared source ${sourceId}`), { code: "NOT_FOUND" });
+  const resolved = resolveSourcePath(source, relative || ".");
+  const secrets = manifest.identities.map(identity => { try { return identitySecret(identity); } catch (e) { return null; } });
+  const redacted = redactText(fs.readFileSync(resolved.absolute, "utf8"), secrets);
+  const digest = sha256(redacted);
+  const artifact = json({ schema_version: 1, source: sourceId, path: relative, bytes: resolved.bytes, content: redacted });
+  const evidenceId = store.evidence(manifest.engagement, null, "source.snapshot", artifact, { source: sourceId, path: relative, bytes: resolved.bytes, digest });
+  const observationId = store.observation(manifest.engagement, "source.read", `${sourceId}:${relative}`, evidenceId, { bytes: resolved.bytes, digest });
+  store.event(manifest.engagement, "source.read", evidenceId, { source: sourceId, path: relative });
+  return { evidenceId, observationId, bytes: resolved.bytes, digest, content: redacted };
+}
 
 function compareOwnership(owner, other, ownerIdentity) {
   if (owner.status < 200 || owner.status >= 300) return {supported:false,reason:"Owner baseline did not succeed"};

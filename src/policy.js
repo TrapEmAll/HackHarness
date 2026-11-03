@@ -1,5 +1,7 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import fs from "node:fs";
+import path from "node:path";
 import { fail } from "./util.js";
 
 function privateIp(ip) {
@@ -27,4 +29,19 @@ export async function resolveTarget(target, url) {
   if (!records.length) fail("Target hostname did not resolve", "NETWORK");
   if (!target.allow_private && records.some(record => privateIp(record.address))) fail("Private, loopback, and link-local targets require allow_private", "SCOPE");
   return records.map(record => record.address);
+}
+
+const SOURCE_READ_CAP_BYTES = 262_144;
+
+// Source libros: files may only be read inside a manifest-declared root,
+// resolved through realpath so symlinks and `..` cannot escape.
+export function resolveSourcePath(source, relative) {
+  let root, target;
+  try { root = fs.realpathSync(source.root_absolute); } catch { fail("Declared source root does not exist", "SCOPE"); }
+  try { target = fs.realpathSync(path.resolve(root, relative)); } catch { fail(`Source path does not exist: ${relative}`, "SCOPE"); }
+  if (target !== root && !target.startsWith(root + path.sep)) fail("Source path escapes the declared root", "SCOPE");
+  const stats = fs.statSync(target);
+  if (!stats.isFile()) fail("Only regular source files can be read", "SCOPE");
+  if (stats.size > SOURCE_READ_CAP_BYTES) fail(`Source file exceeds the ${SOURCE_READ_CAP_BYTES} byte read cap`, "SCOPE");
+  return { absolute: target, bytes: stats.size };
 }

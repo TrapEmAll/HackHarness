@@ -41,8 +41,8 @@ const content = (text: string) => ({ content: [{ type: "text" as const, text }],
 const role = process.env.HH_ROLE || "all";
 const roleTools: Record<string, string[] | null> = {
 	all: null,
-	reviewer: ["hh_context", "hh_findings", "hh_evidence_read"],
-	mapper: ["hh_context"],
+	reviewer: ["hh_context", "hh_findings", "hh_evidence_read", "hh_source_read"],
+	mapper: ["hh_context", "hh_source_read"],
 };
 const roleAllow = roleTools[role] ?? roleTools.all;
 
@@ -84,6 +84,12 @@ export default function hackHarness(pi: ExtensionAPI): void {
 			description: "Read a redacted immutable evidence artifact by ID.",
 			parameters: z.object({ evidence_id:z.string() }), approval: "read" as const,
 			async execute(_id: string, params: { evidence_id: string }, signal?: AbortSignal) { return content(await hh(["evidence",params.evidence_id], signal)); },
+		},
+		hh_source_read: {
+			label: "Read declared source",
+			description: "Read a file from a manifest-declared read-only target source root (traversal-guarded, identity-redacted, evidence-backed).",
+			parameters: z.object({ source_id:z.string(), file:z.string() }), approval: "read" as const,
+			async execute(_id: string, params: { source_id: string; file: string }, signal?: AbortSignal) { return content(await hh(["source-read","--source",params.source_id,"--file",params.file], signal)); },
 		},
 	};
 	for (const [name, definition] of Object.entries(tools)) {
