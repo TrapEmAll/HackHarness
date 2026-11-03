@@ -33,6 +33,10 @@ export function loadManifest(file) {
     return { id: target.id || `target-${index + 1}`, ...target, origin: origin.origin, methods, paths, request_limit: target.request_limit || 100, allow_private: Boolean(target.allow_private) };
   });
   value.limits = { concurrency: 2, requests_per_second: 2, wall_clock_minutes: 30, max_response_bytes: 1_000_000, ...(value.limits || {}) };
+  for (const key of ["requests_per_second","wall_clock_minutes","max_response_bytes","concurrency"]) {
+    const limit = value.limits[key];
+    if (!Number.isFinite(limit) || limit <= 0) fail(`limits.${key} must be a positive number`, "MANIFEST");
+  }
   return { manifest: value, absolute, authFile };
 }
 

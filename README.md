@@ -56,9 +56,11 @@ omp --trusted-extension "$PWD/packages/omp-adapter/index.ts"
 
 Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/hh resume`, `/hh review FINDING_ID approve`, or `/hh report FINDING_ID`. OMP can call the typed `hh_*` tools to submit hypotheses, investigate, read evidence, and replay findings. See [the adapter guide](packages/omp-adapter/README.md).
 
+`hh tasks MANIFEST` lists every task with role, state, attempt number, action key, and wall-clock deadline. Tasks deduplicate on their hypothesis plus normalized action: a second dispatch of a running action fails with `DEDUP` and names the owning task. Opening an engagement after a crash marks tasks that were left `running` as `interrupted` (logged as `task.recovered` events) so they can be redispatched with an incremented attempt number. Each task also gets a wall-clock deadline from `limits.wall_clock_minutes`; gateway work past the deadline fails with `BUDGET` before touching the network.
+
 ## Manifest and policy
 
-Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
+Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, per-target request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
 
 The gateway rejects undeclared origins, methods and paths, credential-bearing URLs, ambiguous encoded paths, and private destinations unless `allow_private` is explicitly set for a local lab. It revalidates redirects, strips credentials across origins, limits response size and redirects, rate-limits requests, and supports an engagement-wide pause.
 
@@ -70,7 +72,11 @@ The data directory is private local state and is ignored by Git. It contains SQL
 npm test
 ```
 
-The suite checks scope escapes, the vulnerable fixture, the fixed negative control, independent replay, report generation, and that persisted artifacts do not contain fixture tokens.
+The suite checks scope escapes, per-target request budgets, task leases with dedup, restart recovery, the vulnerable fixture, the fixed negative control, independent replay, report generation, and that persisted artifacts do not contain fixture tokens.
+
+## Status against DESIGN.md
+
+Implemented from the release sequence: milestone 1 (one complete local workflow) and the first part of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery of interrupted tasks). Not yet implemented: bounded OMP-worker processes, model routing, full concurrency enforcement, browser work, and benchmarks.
 
 ## Current boundary
 

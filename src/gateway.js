@@ -27,8 +27,9 @@ function pinnedRequest(url, { method, headers, body, addresses, maxBytes, timeou
 }
 
 export class Gateway {
-  constructor(store, manifest) { this.store=store; this.manifest=manifest; this.lastRequestAt=0; }
+  constructor(store, manifest) { this.store=store; this.manifest=manifest; this.lastRequestAt=0; this.deadline=Infinity; }
   async request({ taskId, identityId, url, method="GET", headers={}, body=null, purpose="investigation" }) {
+    if (Date.now()>this.deadline) throw Object.assign(new Error("Task wall-clock deadline exceeded"), { code:"BUDGET" });
     const identity=this.manifest.identities.find(item=>item.id===identityId);
     if (!identity) throw Object.assign(new Error(`Unknown identity ${identityId}`),{code:"IDENTITY"});
     const secret=identitySecret(identity);
@@ -36,7 +37,7 @@ export class Gateway {
     while (true) {
       const match=matchTarget(this.manifest,current,currentMethod);
       const resolved=await resolveTarget(match.target,match.url);
-      this.store.incrementRequests(this.manifest.engagement,match.target.request_limit);
+      this.store.incrementRequests(this.manifest.engagement,match.target.id,match.target.request_limit);
       const interval=1000/this.manifest.limits.requests_per_second;
       const wait=Math.max(0,this.lastRequestAt+interval-Date.now());
       if (wait) await new Promise(resolve=>setTimeout(resolve,wait));
