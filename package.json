@@ -1,0 +1,14 @@
+{
+  "name": "hackharness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "hh": "./src/cli.js" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "fixture:vulnerable": "node tests/fixture/server.js vulnerable",
+    "fixture:fixed": "node tests/fixture/server.js fixed",
+    "hh": "node src/cli.js"
+  },
+  "engines": { "node": ">=22.5" }
+}
