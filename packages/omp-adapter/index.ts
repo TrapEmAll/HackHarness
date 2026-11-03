@@ -11,23 +11,26 @@ function configured(): { manifest: string; data: string | undefined } {
 	return { manifest: path.resolve(manifest), data: process.env.HH_DATA_DIR };
 }
 
+// Inside an OMP worker process.execPath is omp.exe, not Node; hh cli.js needs Node.
+const runtime = (process.env.HH_NODE || "node").trim() || "node";
+
 async function hh(args: string[], signal?: AbortSignal): Promise<string> {
 	const config = configured();
-	const complete = [path.join(root, "src/cli.js"), args[0], config.manifest, ...args.slice(1), ...(config.data ? ["--data", config.data] : [])];
-	return await new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, complete, { cwd: root, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "", stderr = "";
-		child.stdout.on("data", chunk => { stdout += chunk; });
-		child.stderr.on("data", chunk => { stderr += chunk; });
-		const abort = () => child.kill("SIGTERM");
-		signal?.addEventListener("abort", abort, { once: true });
-		child.on("error", reject);
-		child.on("close", code => {
-			signal?.removeEventListener("abort", abort);
-			if (code === 0) resolve(stdout.trim());
-			else reject(new Error(stderr.trim() || `HackHarness exited with code ${code}`));
-		});
+	const complete = [runtime, path.join(root, "src/cli.js"), args[0], config.manifest, ...args.slice(1), ...(config.data ? ["--data", config.data] : [])];
+	const { promise, resolve, reject } = Promise.withResolvers<string>();
+	const child = spawn(complete[0], complete.slice(1), { cwd: root, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+	let stdout = "", stderr = "";
+	child.stdout.on("data", chunk => { stdout += chunk; });
+	child.stderr.on("data", chunk => { stderr += chunk; });
+	const abort = () => child.kill("SIGTERM");
+	signal?.addEventListener("abort", abort, { once: true });
+	child.on("error", reject);
+	child.on("close", code => {
+		signal?.removeEventListener("abort", abort);
+		if (code === 0) resolve(stdout.trim());
+		else reject(new Error(stderr.trim() || `HackHarness exited with code ${code}`));
 	});
+	return await promise;
 }
 
 const content = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });

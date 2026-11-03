@@ -58,6 +58,24 @@ Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/
 
 `hh tasks MANIFEST` lists every task with role, state, attempt number, action key, and wall-clock deadline. Tasks deduplicate on their hypothesis plus normalized action: a second dispatch of a running action fails with `DEDUP` and names the owning task. Opening an engagement after a crash marks tasks that were left `running` as `interrupted` (logged as `task.recovered` events) so they can be redispatched with an incremented attempt number. Each task also gets a wall-clock deadline from `limits.wall_clock_minutes`; gateway work past the deadline fails with `BUDGET` before touching the network.
 
+`hh delegate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--model ALIAS]` runs the same authorization investigation through a real OMP worker instead of the CLI. The worker is spawned once per dispatch as `omp --mode rpc --no-session --no-ui --no-tools --no-extensions --trusted-extension packages/omp-adapter/index.ts` from a private scratch directory, with the engagement manifest path and data directory injected into its environment via the normal env vars. With `--no-tools` all built-in tools are disabled, so the worker's only capabilities are the `hh_*` tools in the allowlisted extension: it cannot reach the target except through the scoped gateway. Prompt completion follows omp's RPC contract — the `response` acknowledgment is acceptance, not completion; only a terminal `agent_end` (or a `prompt_result` with `agentInvoked: false`) completes a turn, and every unexpected exit becomes a failed attempt recorded on its task. Deadlines send RPC `abort` and then force exit after a grace period; worker cost is recorded from `get_session_stats` as worker.cost events when the session reports it.
+
+Manifest additions:
+
+```json
+{
+  "limits": { "max_cost_usd": 5 },
+  "workers": {
+    "binary": "omp",
+    "routing": { "investigator": "fuzzy-model-alias", "verifier": "another-alias" }
+  }
+}
+```
+
+`workers.binary` defaults to `omp` on PATH (override with the `HH_OMP` env var). Routing aliases are OMP fuzzy model patterns, not hard-coded vendor names. Set the model with `--model` per dispatch, `workers.routing.investigator` by default, or neither for the session default model. `limits.max_cost_usd` is passed to the worker as omp's `--max-cost` cap; when a session cannot report usage, no cost is recorded rather than a guessed one.
+
+This is tool-surface narrowing, not an environment or OS sandbox. The worker process runs with your user, inherits the parent process environment (including the `env://` credential variables — the gateway reads them in the `hh investigate` child), and calls its configured model provider directly with your own credentials. What the boundary gives you: the worker has no built-in bash/browser/file tools, no ambient project extensions, and cannot reach the target except through the scoped, budgeted gateway. What it does not give you: secret isolation, network isolation, or filesystem isolation.
+
 ## Manifest and policy
 
 Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, per-target request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
@@ -72,11 +90,11 @@ The data directory is private local state and is ignored by Git. It contains SQL
 npm test
 ```
 
-The suite checks scope escapes, per-target request budgets, task leases with dedup, restart recovery, the vulnerable fixture, the fixed negative control, independent replay, report generation, and that persisted artifacts do not contain fixture tokens.
+The suite checks scope escapes, per-target request budgets, task leases with dedup, restart recovery, RPC worker wire contracts (against an in-repo fake omp, plus an optional live run with `HH_OMP_TEST=1` requiring a configured omp), the vulnerable fixture, the fixed negative control, independent replay, report generation, and that persisted artifacts do not contain fixture tokens.
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow) and the first part of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery of interrupted tasks). Not yet implemented: bounded OMP-worker processes, model routing, full concurrency enforcement, browser work, and benchmarks.
+Implemented from the release sequence: milestone 1 (one complete local workflow) and most of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery, bounded single-worker OMP dispatch over RPC with model routing and cost caps). Not yet implemented: multi-worker concurrency scheduling, verification through independent OMP workers, browser work, and benchmarks.
 
 ## Current boundary
 

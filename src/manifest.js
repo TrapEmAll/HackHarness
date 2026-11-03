@@ -37,6 +37,13 @@ export function loadManifest(file) {
     const limit = value.limits[key];
     if (!Number.isFinite(limit) || limit <= 0) fail(`limits.${key} must be a positive number`, "MANIFEST");
   }
+  if (value.limits.max_cost_usd !== undefined && !(Number.isFinite(value.limits.max_cost_usd) && value.limits.max_cost_usd > 0)) fail("limits.max_cost_usd must be a positive number", "MANIFEST");
+  value.workers = { binary: process.env.HH_OMP || "omp", ...(value.workers || {}) };
+  if (typeof value.workers.binary !== "string" || !value.workers.binary) fail("workers.binary must be a nonempty string", "MANIFEST");
+  if (value.workers.args !== undefined && !(Array.isArray(value.workers.args) && value.workers.args.every(entry => typeof entry === "string"))) fail("workers.args must be an array of strings", "MANIFEST");
+  for (const [role, alias] of Object.entries(value.workers.routing || {})) {
+    if (typeof alias !== "string" || !alias) fail(`workers.routing.${role} must be a nonempty model alias`, "MANIFEST");
+  }
   return { manifest: value, absolute, authFile };
 }
 
