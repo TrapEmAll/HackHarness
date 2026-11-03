@@ -35,44 +35,61 @@ async function hh(args: string[], signal?: AbortSignal): Promise<string> {
 
 const content = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 
+// Role gating: workers get only the tools their role needs. HH_ROLE maps to an
+// allowlist; anything outside it never registers, so prompt injection cannot
+// call target-facing tools from a read-only role. Default "all" for CLI use.
+const role = process.env.HH_ROLE || "all";
+const roleTools: Record<string, string[] | null> = {
+	all: null,
+	reviewer: ["hh_context", "hh_findings", "hh_evidence_read"],
+	mapper: ["hh_context"],
+};
+const roleAllow = roleTools[role] ?? roleTools.all;
+
 export default function hackHarness(pi: ExtensionAPI): void {
 	const z = pi.zod;
-	pi.registerTool({
-		name: "hh_context", label: "HackHarness context",
-		description: "Read the active authorized engagement, identities, target scope, and request budget.",
-		parameters: z.object({}), approval: "read",
-		async execute(_id, _params, signal) { return content(await hh(["context"], signal)); },
-	});
-	pi.registerTool({
-		name: "hh_hypothesis_submit", label: "Submit hypothesis",
-		description: "Persist a falsifiable security hypothesis with its negative control and bounded check.",
-		parameters: z.object({ claim:z.string(), control:z.string(), proposed_check:z.string() }), approval: "exec",
-		async execute(_id, params, signal) { return content(await hh(["hypothesis","--claim",params.claim,"--control",params.control,"--check",params.proposed_check], signal)); },
-	});
-	pi.registerTool({
-		name: "hh_investigate_authorization", label: "Investigate authorization",
-		description: "Compare one in-scope object using two controlled identities through policy, budgets, redaction, and evidence capture.",
-		parameters: z.object({ hypothesis_id:z.string(), path:z.string(), owner_identity:z.string(), other_identity:z.string() }), approval: "exec",
-		async execute(_id, params, signal) { return content(await hh(["investigate",params.hypothesis_id,"--path",params.path,"--owner",params.owner_identity,"--other",params.other_identity], signal)); },
-	});
-	pi.registerTool({
-		name: "hh_findings", label: "List findings",
-		description: "List persisted findings with title, state, impact, and timestamps for duplication checks.",
-		parameters: z.object({}), approval: "read",
-		async execute(_id, _params, signal) { return content(await hh(["findings"], signal)); },
-	});
-	pi.registerTool({
-		name: "hh_replay", label: "Replay finding",
-		description: "Independently replay a candidate finding with fresh owner and negative-control captures.",
-		parameters: z.object({ finding_id:z.string() }), approval: "exec",
-		async execute(_id, params, signal) { return content(await hh(["replay",params.finding_id], signal)); },
-	});
-	pi.registerTool({
-		name: "hh_evidence_read", label: "Read redacted evidence",
-		description: "Read a redacted immutable evidence artifact by ID.",
-		parameters: z.object({ evidence_id:z.string() }), approval: "read",
-		async execute(_id, params, signal) { return content(await hh(["evidence",params.evidence_id], signal)); },
-	});
+	const tools: Record<string, Omit<Parameters<typeof pi.registerTool>[0], "name"> & { name: string }> = {
+		hh_context: {
+			label: "HackHarness context",
+			description: "Read the active authorized engagement, identities, target scope, and request budget.",
+			parameters: z.object({}), approval: "read" as const,
+			async execute(_id: string, _params: object, signal?: AbortSignal) { return content(await hh(["context"], signal)); },
+		},
+		hh_hypothesis_submit: {
+			label: "Submit hypothesis",
+			description: "Persist a falsifiable security hypothesis with its negative control and bounded check.",
+			parameters: z.object({ claim:z.string(), control:z.string(), proposed_check:z.string() }), approval: "exec" as const,
+			async execute(_id: string, params: { claim: string; control: string; proposed_check: string }, signal?: AbortSignal) { return content(await hh(["hypothesis","--claim",params.claim,"--control",params.control,"--check",params.proposed_check], signal)); },
+		},
+		hh_investigate_authorization: {
+			label: "Investigate authorization",
+			description: "Compare one in-scope object using two controlled identities through policy, budgets, redaction, and evidence capture.",
+			parameters: z.object({ hypothesis_id:z.string(), path:z.string(), owner_identity:z.string(), other_identity:z.string() }), approval: "exec" as const,
+			async execute(_id: string, params: { hypothesis_id: string; path: string; owner_identity: string; other_identity: string }, signal?: AbortSignal) { return content(await hh(["investigate",params.hypothesis_id,"--path",params.path,"--owner",params.owner_identity,"--other",params.other_identity], signal)); },
+		},
+		hh_findings: {
+			label: "List findings",
+			description: "List persisted findings with title, state, impact, and timestamps for duplication checks.",
+			parameters: z.object({}), approval: "read" as const,
+			async execute(_id: string, _params: object, signal?: AbortSignal) { return content(await hh(["findings"], signal)); },
+		},
+		hh_replay: {
+			label: "Replay finding",
+			description: "Independently replay a candidate finding with fresh owner and negative-control captures.",
+			parameters: z.object({ finding_id:z.string() }), approval: "exec" as const,
+			async execute(_id: string, params: { finding_id: string }, signal?: AbortSignal) { return content(await hh(["replay",params.finding_id], signal)); },
+		},
+		hh_evidence_read: {
+			label: "Read redacted evidence",
+			description: "Read a redacted immutable evidence artifact by ID.",
+			parameters: z.object({ evidence_id:z.string() }), approval: "read" as const,
+			async execute(_id: string, params: { evidence_id: string }, signal?: AbortSignal) { return content(await hh(["evidence",params.evidence_id], signal)); },
+		},
+	};
+	for (const [name, definition] of Object.entries(tools)) {
+		if (roleAllow && !roleAllow.includes(name)) continue;
+		pi.registerTool({ name, ...definition });
+	}
 	pi.registerCommand("hh", {
 		description: "HackHarness: /hh context | hypotheses | findings | pause | resume | review FINDING approve|reject | report FINDING",
 		handler: async (raw, ctx) => {

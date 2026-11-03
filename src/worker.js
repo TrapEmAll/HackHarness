@@ -12,9 +12,9 @@ import path from "node:path";
 export const ABORT_GRACE_MS = 30_000;
 
 export class RpcWorker {
-  constructor({ binary = "omp", args = [], cwd, model, maxCostUsd, extension, env = process.env, yolo = false, logError = () => {} }) {
+  constructor({ binary = "omp", args = [], cwd, model, maxCostUsd, extension, env = process.env, yolo = false, role, logError = () => {} }) {
     if (!binary) throw Object.assign(new Error("workers.binary must be a nonempty string"), { code: "CONFIG" });
-    this.binary = binary; this.args = args; this.cwd = cwd; this.model = model; this.maxCostUsd = maxCostUsd; this.extension = extension; this.env = env; this.yolo = yolo; this.logError = logError;
+    this.binary = binary; this.args = args; this.cwd = cwd; this.model = model; this.maxCostUsd = maxCostUsd; this.extension = extension; this.env = env; this.yolo = yolo; this.role = role; this.logError = logError;
     this.process = null; this.promptCounter = 0;
     this.pendingResponses = new Map(); this.pendingPrompts = new Map();
   }
