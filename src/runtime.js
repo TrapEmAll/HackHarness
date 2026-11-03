@@ -6,5 +6,6 @@ export function runtime(manifestPath, dataRoot) {
   const loaded=loadManifest(manifestPath), root=dataRoot || process.env.HH_DATA_DIR || path.join(process.cwd(),".hackharness-data");
   const store=new Store(root), existing=store.engagement(loaded.manifest.engagement);
   if (!existing) store.createEngagement(loaded.absolute,loaded.manifest);
+  store.recover(loaded.manifest.engagement);
   return {store,manifest:loaded.manifest,manifestPath:loaded.absolute};
 }

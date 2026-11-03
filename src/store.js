@@ -12,8 +12,9 @@ export class Store {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS engagement (id TEXT PRIMARY KEY, manifest_path TEXT NOT NULL, manifest_json TEXT NOT NULL, created_at TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0, requests_used INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS hypothesis (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, claim TEXT NOT NULL, control TEXT NOT NULL, proposed_check TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS task (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, hypothesis_id TEXT, role TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, completed_at TEXT);
+      CREATE TABLE IF NOT EXISTS task (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, hypothesis_id TEXT, role TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, completed_at TEXT, action_key TEXT, deadline_at TEXT);
       CREATE TABLE IF NOT EXISTS evidence (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, task_id TEXT, kind TEXT NOT NULL, digest TEXT NOT NULL, artifact_path TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS target_usage (engagement_id TEXT NOT NULL, target_id TEXT NOT NULL, requests_used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(engagement_id, target_id));
       CREATE TABLE IF NOT EXISTS finding (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, hypothesis_id TEXT, title TEXT NOT NULL, state TEXT NOT NULL, evidence_json TEXT NOT NULL, replay_json TEXT NOT NULL, impact TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS event (seq INTEGER PRIMARY KEY AUTOINCREMENT, engagement_id TEXT NOT NULL, type TEXT NOT NULL, object_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
     `);
@@ -27,9 +28,19 @@ export class Store {
     this.event(manifest.engagement,"engagement.opened",manifest.engagement,{manifest_path:manifestPath});
   }
   engagement(idValue) { return this.db.prepare("SELECT * FROM engagement WHERE id=?").get(idValue); }
-  incrementRequests(engagement, targetLimit) {
-    const result = this.db.prepare("UPDATE engagement SET requests_used=requests_used+1 WHERE id=? AND paused=0 AND requests_used < ?").run(engagement,targetLimit);
-    if (!result.changes) throw Object.assign(new Error("Engagement paused or request budget exhausted"), { code:"BUDGET" });
+  incrementRequests(engagement, targetId, targetLimit) {
+    const row = this.engagement(engagement);
+    if (!row) throw Object.assign(new Error("Unknown engagement"), { code:"BUDGET" });
+    if (row.paused) throw Object.assign(new Error("Engagement is paused"), { code:"BUDGET" });
+    const result = this.db.prepare("INSERT INTO target_usage(engagement_id,target_id,requests_used) VALUES(?,?,1) ON CONFLICT(engagement_id,target_id) DO UPDATE SET requests_used=requests_used+1 WHERE requests_used < ?").run(engagement,targetId,targetLimit);
+    if (!result.changes) throw Object.assign(new Error("Request budget exhausted for target"), { code:"BUDGET" });
+  }
+  requestsUsed(engagement) { return this.db.prepare("SELECT COALESCE(SUM(requests_used),0) AS total FROM target_usage WHERE engagement_id=?").get(engagement).total; }
+  recover(engagement) {
+    const running = this.db.prepare("SELECT id FROM task WHERE engagement_id=? AND state='running'").all(engagement);
+    for (const row of running) this.db.prepare("UPDATE task SET state='interrupted',completed_at=? WHERE id=?").run(now(),row.id);
+    if (running.length) this.event(engagement,"task.recovered",engagement,{interrupted:running.map(row=>row.id)});
+    return running.length;
   }
   hypothesis(engagement, claim, control, proposedCheck) {
     const value = id("H");
@@ -37,7 +48,17 @@ export class Store {
     this.event(engagement,"hypothesis.proposed",value,{claim}); return value;
   }
   setHypothesis(value, state) { this.db.prepare("UPDATE hypothesis SET state=? WHERE id=?").run(state,value); }
-  task(engagement, hypothesis, role) { const value=id("T"); this.db.prepare("INSERT INTO task(id,engagement_id,hypothesis_id,role,state,created_at) VALUES(?,?,?,?,?,?)").run(value,engagement,hypothesis,role,"running",now()); this.event(engagement,"task.started",value,{role,hypothesis}); return value; }
+  task(engagement, hypothesis, role, { actionKey, deadlineAt } = {}) {
+    const key = actionKey || `${hypothesis}:${role}`;
+    const active = this.db.prepare("SELECT id FROM task WHERE engagement_id=? AND action_key=? AND state='running'").get(engagement,key);
+    if (active) throw Object.assign(new Error(`Task ${active.id} already owns this action; cancel it before redispatching`), { code:"DEDUP", task_id: active.id });
+    const prior = this.db.prepare("SELECT COALESCE(MAX(attempt),0) AS attempt FROM task WHERE engagement_id=? AND action_key=?").get(engagement,key);
+    const attempt = prior.attempt + 1;
+    const value = id("T");
+    this.db.prepare("INSERT INTO task(id,engagement_id,hypothesis_id,role,state,attempt,created_at,action_key,deadline_at) VALUES(?,?,?,?,?,?,?,?,?)").run(value,engagement,hypothesis,role,"running",attempt,now(),key,deadlineAt||null);
+    this.event(engagement,"task.started",value,{role,hypothesis,attempt,action_key:key,deadline_at:deadlineAt||null});
+    return value;
+  }
   finishTask(value,state) { this.db.prepare("UPDATE task SET state=?,completed_at=? WHERE id=?").run(state,now(),value); }
   evidence(engagement, task, kind, content, metadata) {
     const value=id("E"), digest=sha256(content), relative=`artifacts/${value}.json`;

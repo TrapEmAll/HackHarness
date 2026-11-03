@@ -20,9 +20,11 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
   const hypothesis=store.db.prepare("SELECT * FROM hypothesis WHERE id=? AND engagement_id=?").get(hypothesisId,manifest.engagement);
   if (!hypothesis) throw Object.assign(new Error("Hypothesis not found in engagement"),{code:"NOT_FOUND"});
   const target=manifest.targets[0], url=new URL(resourcePath,target.origin).href;
-  const taskId=store.task(manifest.engagement,hypothesisId,"investigator"); store.setHypothesis(hypothesisId,"investigating");
+  const deadline=Date.now()+manifest.limits.wall_clock_minutes*60_000;
+  const actionKey=`authorization:${resourcePath}:${ownerIdentity}:${otherIdentity}`;
+  const taskId=store.task(manifest.engagement,hypothesisId,"investigator",{actionKey,deadlineAt:new Date(deadline).toISOString()}); store.setHypothesis(hypothesisId,"investigating");
   try {
-    const gateway=new Gateway(store,manifest);
+    const gateway=new Gateway(store,manifest); gateway.deadline=deadline;
     const owner=await gateway.request({taskId,identityId:ownerIdentity,url,purpose:"owner baseline"});
     const other=await gateway.request({taskId,identityId:otherIdentity,url,purpose:"negative authorization control"});
     const result=compareOwnership(owner,other,ownerIdentity);
@@ -38,7 +40,9 @@ export async function replayFinding(store,manifest,findingId) {
   const finding=store.findingById(findingId);
   if (!finding || finding.engagement_id!==manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"),{code:"NOT_FOUND"});
   if (finding.replay.type!=="authorization_read") throw Object.assign(new Error("Unsupported replay type"),{code:"REPLAY"});
-  const taskId=store.task(manifest.engagement,finding.hypothesis_id,"verifier"), gateway=new Gateway(store,manifest), url=new URL(finding.replay.path,manifest.targets[0].origin).href;
+  const deadline=Date.now()+manifest.limits.wall_clock_minutes*60_000;
+  const taskId=store.task(manifest.engagement,finding.hypothesis_id,"verifier",{actionKey:`replay:${findingId}`,deadlineAt:new Date(deadline).toISOString()}), gateway=new Gateway(store,manifest); gateway.deadline=deadline;
+  const url=new URL(finding.replay.path,manifest.targets[0].origin).href;
   try {
     const owner=await gateway.request({taskId,identityId:finding.replay.owner_identity,url,purpose:"independent owner replay"});
     const other=await gateway.request({taskId,identityId:finding.replay.other_identity,url,purpose:"independent negative control replay"});
