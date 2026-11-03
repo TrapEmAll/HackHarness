@@ -86,6 +86,17 @@ This is tool-surface narrowing, not an environment or OS sandbox. The worker pro
 
 `hh map MANIFEST [--identity ID]` runs the mapper playbook through the scoped gateway: it probes each declared path prefix with every declared identity, discovers JSON-shaped child paths (`/api/...` strings in responses), and records `Observation` rows — `endpoint.probe` for single-identity mappings, or `authorization.denied` (identities disagreed with a denial), `authorization.diff` (different owner markers), `cross_identity.pool` (every identity saw the same owner marker), or `uniform` per discovered path. Observations cite the evidence capture backing them; `hh observations MANIFEST` lists them. Mapping is read-only, budgeted, and deductible to the same per-target request limits as investigations — planning is your job: submit hypotheses with `hh hypothesis` or the `hh_hypothesis_submit` tool using the observations as justification.
 
+## Benchmark
+
+`hh bench MANIFEST --mode vulnerable|fixed [--trials N]` measures the deterministic authorization playbook against a labeled fixture (start the matching fixture server first; the metrics are for the machinery, not the model planner — planner-quality benchmarks need `hh delegate` and cost money, so they are not run automatically). Output per run:
+
+- `denominator` / `trials` / `incomplete`: what was attempted and what failed (rows keep per-trial outcomes with denominated failures, never dropped).
+- `reproduced` and `independently_verified`: supported claims and their independent replay rate (`replay_success_rate`); on the labeled `vulnerable` fixture both should equal `trials`; on `fixed`, both are expected to be 0 — a supported claim there is a false positive you must investigate.
+- `requests_total` / `requests_per_trial`: each trial's probes (investigation + independent replay) counted through the same budget as real work.
+- `elapsed_ms`, `scope_violations` (any `SCOPE` error code), and `fixture_is_read_only` (manifest honesty check that only read methods were declared).
+
+The summary is also logged as a `benchmark.completed` event with its hypothesis reference.
+
 ## Manifest and policy
 
 Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, per-target request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
@@ -104,8 +115,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, source-assisted playbooks, reviewer workflow, and benchmark reporting.
+Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, source-assisted playbooks, reviewer workflow, and model-driven benchmark reporting (the deterministic fixture benchmark harness ships as `hh bench`; planner-quality measurements must be driven manually through `hh delegate`).
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, and the read-only mapper playbook. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, the read-only mapper playbook, and the deterministic fixture benchmark harness. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.

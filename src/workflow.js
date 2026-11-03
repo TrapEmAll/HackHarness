@@ -161,6 +161,46 @@ export async function mapEngagement(store, manifest, { identityId, model } = {})
   return { taskId, discovered: [...probes.keys()], probes:[...probes.values()] };
 }
 
+// Deterministic benchmark of the authorization playbook against a labeled
+// fixture. It does NOT exercise the model planner; it measures the machinery:
+// supported findings, independent replay success, requests, time, scope burns.
+export async function benchmark(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, trials = 1 } = {}) {
+  if (!resourcePath || !ownerIdentity || !otherIdentity) throw Object.assign(new Error("benchmark requires --path --owner --other"), { code: "INVALID" });
+  const rounds = Math.max(1, Math.round(trials));
+  const engagement = manifest.engagement;
+  const startedAt = store.requestsUsed(engagement), startedMS = Date.now();
+  let scopeViolations = 0, reproduced = 0, verified = 0;
+  const rows = [];
+  const hypothesis = store.hypothesis(engagement, `Fixture bench: ${resourcePath}`, "fixture control denies identity", `Compare ${resourcePath} across identities`);
+  for (let trial = 0; trial < rounds; trial++) {
+    try {
+      const result = await investigateAuthorization(store, manifest, { hypothesisId: hypothesis, path: resourcePath, ownerIdentity, otherIdentity });
+      const replayState = result.findingId ? (await replayFinding(store, manifest, result.findingId)).state : null;
+      if (result.state === "reproduced") reproduced++;
+      if (replayState === "independently_verified") verified++;
+      rows.push({ trial, state: result.state, findingId: result.findingId, replayState });
+    } catch (error) {
+      if (error.code === "SCOPE") scopeViolations++;
+      rows.push({ trial, error: error.code || "ERROR" });
+    }
+  }
+  const requests = store.requestsUsed(engagement) - startedAt;
+  const elapsed = Date.now() - startedMS;
+  const summary = {
+    trials: rounds, denominator: rounds, incomplete: rows.filter(row=>row.error).length,
+    reproduced, independently_verified: verified,
+    precision_of_supported_claims: verified / (verified + rows.filter(row=>row.state==="rejected").length || 1),
+    requests_per_trial: Number((requests / rounds).toFixed(2)),
+    requests_total: requests, elapsed_ms: elapsed,
+    replay_success_rate: reproduced ? Number((verified / reproduced).toFixed(3)) : null,
+    scope_violations: scopeViolations,
+    fixture_is_read_only: manifest.targets.every(target=>target.methods.every(method=>["GET","HEAD","OPTIONS"].includes(method))),
+    rows,
+  };
+  store.event(engagement,"benchmark.completed",null,{hypothesis,...summary});
+  return summary;
+}
+
 export async function autopilot(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, model }) {
   if (!resourcePath) throw Object.assign(new Error("autopilot requires --path"), { code: "INVALID" });
   if (!ownerIdentity || !otherIdentity) throw Object.assign(new Error("autopilot requires --owner and --other identities"), { code: "INVALID" });
