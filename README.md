@@ -82,6 +82,10 @@ Manifest additions:
 
 This is tool-surface narrowing, not an environment or OS sandbox. The worker process runs with your user, inherits the parent process environment (including the `env://` credential variables — the gateway reads them in the `hh investigate` child), and calls its configured model provider directly with your own credentials. What the boundary gives you: the worker has no built-in bash/browser/file tools, no ambient project extensions, and cannot reach the target except through the scoped, budgeted gateway. What it does not give you: secret isolation, network isolation, or filesystem isolation.
 
+## Map and observations
+
+`hh map MANIFEST [--identity ID]` runs the mapper playbook through the scoped gateway: it probes each declared path prefix with every declared identity, discovers JSON-shaped child paths (`/api/...` strings in responses), and records `Observation` rows — `endpoint.probe` for single-identity mappings, or `authorization.denied` (identities disagreed with a denial), `authorization.diff` (different owner markers), `cross_identity.pool` (every identity saw the same owner marker), or `uniform` per discovered path. Observations cite the evidence capture backing them; `hh observations MANIFEST` lists them. Mapping is read-only, budgeted, and deductible to the same per-target request limits as investigations — planning is your job: submit hypotheses with `hh hypothesis` or the `hh_hypothesis_submit` tool using the observations as justification.
+
 ## Manifest and policy
 
 Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, per-target request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
@@ -100,8 +104,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow) and milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps). Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, and benchmarks.
+Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, source-assisted playbooks, reviewer workflow, and benchmark reporting.
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons, including OMP-worker delegation of both investigation and independent verification. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, and the read-only mapper playbook. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.

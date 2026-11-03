@@ -106,6 +106,60 @@ export async function replayFinding(store,manifest,findingId) {
   } catch(error) { store.finishTask(taskId,"failed"); throw error; }
 }
 
+const PATH_LIKE = /^\/[A-Za-z0-9][A-Za-z0-9/_.-]*$/;
+
+function ownerMarker(json) {
+  const marker = json?.owner ?? json?.owner_id ?? json?.user_id ?? null;
+  return marker === null ? null : String(marker);
+}
+
+function childPaths(json) {
+  if (!json) return [];
+  const values = Array.isArray(json) ? json : Object.values(json).flat();
+  return values.filter(value => typeof value === "string" && PATH_LIKE.test(value)).slice(0, 25);
+}
+
+// Mapper playbook: bounded read-only navigation for the application map.
+// Probes target-declared path prefixes and JSON-discovered children with each
+// declared identity through the scoped gateway, then records facts as
+// observations: endpoint probes per identity plus authorization diffs.
+export async function mapEngagement(store, manifest, { identityId, model } = {}) {
+  const identities = manifest.identities.filter(identity => !identityId || identity.id === identityId);
+  if (!identities.length) throw Object.assign(new Error("No matching identity for mapping"), { code: "IDENTITY" });
+  const taskId = store.task(manifest.engagement, null, "mapper", { maxRunning: manifest.limits.concurrency });
+  const gateway = new Gateway(store, manifest);
+  const probes = new Map(); // path -> { identityId: {evidence,status,marker} }
+  const queue = [];
+  for (const target of manifest.targets) for (const prefix of target.paths) queue.push(new URL(prefix, target.origin).href);
+  try {
+    while (queue.length) {
+      const path_ = queue.shift();
+      for (const identity of identities) {
+        const result = await gateway.request({ taskId, identityId: identity.id, url: path_, purpose: "mapper discovery" });
+        const marker = result.json ? ownerMarker(result.json) : null;
+        (probes.get(path_) ?? probes.set(path_, {}).get(path_))[identity.id] = { evidence: result.evidenceId, status: result.status, marker };
+        for (const child of childPaths(result.json)) { const child_ = new URL(child, path_).href; if (!probes.has(child_) && !queue.includes(child_)) queue.push(child_); }
+      }
+      const perIdentity = probes.get(path_);
+      if (identities.length > 1) {
+        const statuses = new Set(Object.values(perIdentity).map(row=>row.status));
+        const markers = new Set(Object.values(perIdentity).map(row=>row.marker));
+        let kind, reason;
+        if (statuses.size > 1 && Object.values(perIdentity).some(row=>row.status>=400)) { kind="authorization.denied"; reason="identity outcomes differed (status) on the same object"; }
+        else if (markers.size > 1) { kind="authorization.diff"; reason="identities saw different owner markers on the same object"; }
+        else if (markers.size===1 && Object.values(perIdentity)[0].marker) { kind="cross_identity.pool"; reason="every declared identity was exposed the same owner marker"; }
+        else { kind="uniform"; reason="identities agree with no owner marker"; }
+        store.observation(manifest.engagement, kind, path_, Object.values(perIdentity)[0].evidence, { identity_probes: perIdentity, reason });
+      } else {
+        const probe = perIdentity[identities[0].id];
+        store.observation(manifest.engagement, "endpoint.probe", path_, probe.evidence, { identity: identities[0].id, status: probe.status, marker: probe.marker });
+      }
+    }
+    store.finishTask(taskId,"completed");
+  } catch(error) { store.finishTask(taskId,"failed"); throw error; }
+  return { taskId, discovered: [...probes.keys()], probes:[...probes.values()] };
+}
+
 export async function autopilot(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, model }) {
   if (!resourcePath) throw Object.assign(new Error("autopilot requires --path"), { code: "INVALID" });
   if (!ownerIdentity || !otherIdentity) throw Object.assign(new Error("autopilot requires --owner and --other identities"), { code: "INVALID" });

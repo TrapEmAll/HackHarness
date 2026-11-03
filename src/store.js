@@ -17,6 +17,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS target_usage (engagement_id TEXT NOT NULL, target_id TEXT NOT NULL, requests_used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(engagement_id, target_id));
       CREATE TABLE IF NOT EXISTS finding (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, hypothesis_id TEXT, title TEXT NOT NULL, state TEXT NOT NULL, evidence_json TEXT NOT NULL, replay_json TEXT NOT NULL, impact TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS event (seq INTEGER PRIMARY KEY AUTOINCREMENT, engagement_id TEXT NOT NULL, type TEXT NOT NULL, object_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS observation (id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT NOT NULL, evidence_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL);
     `);
   }
   close() { this.db.close(); }
@@ -75,6 +76,13 @@ export class Store {
   finding(engagement,hypothesis,title,evidence,replay,impact,state="candidate") { const value=id("F"),time=now(); this.db.prepare("INSERT INTO finding VALUES(?,?,?,?,?,?,?,?,?,?)").run(value,engagement,hypothesis,title,state,json(evidence),json(replay),impact,time,time); this.event(engagement,"finding.created",value,{title,state}); return value; }
   findingById(value) { const row=this.db.prepare("SELECT * FROM finding WHERE id=?").get(value); return row && {...row,evidence:JSON.parse(row.evidence_json),replay:JSON.parse(row.replay_json)}; }
   setFinding(value,state) { const finding=this.findingById(value); this.db.prepare("UPDATE finding SET state=?,updated_at=? WHERE id=?").run(state,now(),value); this.event(finding.engagement_id,`finding.${state}`,value,{}); }
-  list(table,engagement) { if (!new Set(["hypothesis","finding","task","evidence","event"]).has(table)) throw new Error("Invalid table"); return this.db.prepare(`SELECT * FROM ${table} WHERE engagement_id=? ORDER BY ${table === "event" ? "seq" : "created_at"} DESC`).all(engagement); }
+  list(table,engagement) { if (!new Set(["hypothesis","finding","task","evidence","event","observation"]).has(table)) throw new Error("Invalid table"); return this.db.prepare(`SELECT * FROM ${table} WHERE engagement_id=? ORDER BY ${table === "event" ? "seq" : "created_at"} DESC`).all(engagement); }
   pause(engagement,paused=true) { this.db.prepare("UPDATE engagement SET paused=? WHERE id=?").run(paused?1:0,engagement); this.event(engagement,paused?"engagement.paused":"engagement.resumed",engagement,{}); }
+  observation(engagement,kind,subject,evidenceId,payload) {
+    const value=id("O");
+    this.db.prepare("INSERT INTO observation(id,engagement_id,kind,subject,evidence_id,payload_json,created_at) VALUES(?,?,?,?,?,?,?)").run(value,engagement,kind,subject,evidenceId||null,json(payload||{}),now());
+    this.event(engagement,"observation.recorded",value,{kind,subject});
+    return value;
+  }
+  observationById(value) { const row=this.db.prepare("SELECT * FROM observation WHERE id=?").get(value); return row && {...row,payload:JSON.parse(row.payload_json)}; }
 }

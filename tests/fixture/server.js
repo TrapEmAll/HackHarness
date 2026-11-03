@@ -8,6 +8,7 @@ const server=http.createServer((request,response)=>{
   if(request.url==="/health"){response.end(JSON.stringify({ok:true,mode}));return;}
   const identity=identities[request.headers.authorization];
   if(!identity){response.statusCode=401;response.end(JSON.stringify({error:"unauthorized"}));return;}
+  if(request.url==="/api/"){response.end(JSON.stringify({objects:["/api/objects/a1","/api/objects/b1"]}));return;}
   const match=/^\/api\/objects\/([ab]1)$/.exec(request.url||"");
   if(!match){response.statusCode=404;response.end(JSON.stringify({error:"not found"}));return;}
   const object=objects[match[1]];
