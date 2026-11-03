@@ -69,7 +69,9 @@ export async function delegateReview(store, manifest, { findingId, model } = {})
   const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
   const dispatchKey = `worker-review:${findingId}`;
   const taskId = store.task(manifest.engagement, finding.hypothesis_id, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
-  const allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId);
+  let allocation;
+  try { allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId); }
+  catch (error) { store.finishTask(taskId, "failed"); store.settleTaskCost(taskId, 0, { released: true }); store.event(manifest.engagement, "task.pre_dispatch_failed", taskId, { code: error.code }); throw error; }
   const modelAlias = model || manifest.workers.routing?.reviewer || manifest.workers.routing?.verifier || manifest.workers.routing?.investigator;
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, role: "reviewer", env: { ...process.env, HH_ROLE: "reviewer", HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement,"reviewer.started",taskId,{finding:findingId,model:modelAlias||null});
@@ -114,7 +116,9 @@ export async function delegateInvestigation(store, manifest, { hypothesisId, pat
   // call re-deduplicates on the normalized action it shares with direct runs.
   const dispatchKey = `worker:${hypothesisId}:${resourcePath}:${ownerIdentity}:${otherIdentity}`;
   const taskId = store.task(manifest.engagement, hypothesisId, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
-  const allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId);
+  let allocation;
+  try { allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId); }
+  catch (error) { store.finishTask(taskId, "failed"); store.settleTaskCost(taskId, 0, { released: true }); store.event(manifest.engagement, "task.pre_dispatch_failed", taskId, { code: error.code }); throw error; }
   const modelAlias = model || manifest.workers.routing?.investigator;
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement, "worker.started", taskId, { hypothesis: hypothesisId, model: modelAlias || null, binary: manifest.workers.binary });
@@ -297,7 +301,9 @@ export async function delegateReplay(store, manifest, { findingId, model }) {
   const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
   const dispatchKey = `worker-replay:${findingId}`;
   const taskId = store.task(manifest.engagement, finding.hypothesis_id, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
-  const allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId);
+  let allocation;
+  try { allocation = store.reserveWorkerBudget(manifest.engagement, manifest.limits.max_cost_usd, manifest.limits.cost_reserve_usd, taskId); }
+  catch (error) { store.finishTask(taskId, "failed"); store.settleTaskCost(taskId, 0, { released: true }); store.event(manifest.engagement, "task.pre_dispatch_failed", taskId, { code: error.code }); throw error; }
   const modelAlias = model || manifest.workers.routing?.verifier || manifest.workers.routing?.investigator;
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement, "worker.started", taskId, { hypothesis: finding.hypothesis_id, replay: findingId, model: modelAlias || null, binary: manifest.workers.binary });

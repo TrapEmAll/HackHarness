@@ -4,6 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/store.js";
+import { loadManifest } from "../src/manifest.js";
+import { delegateInvestigation } from "../src/workflow.js";
+
+process.env.HH_TOKEN_A="fixture-token-a"; process.env.HH_TOKEN_B="fixture-token-b";
 
 test("worker cost reservations are capped atomically across concurrent dispatches",t=>{
   const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-cost-"))); t.after(()=>store.close());
@@ -59,6 +63,25 @@ test("reserve failure leaves the task usable and charges nothing",t=>{
   assert.throws(()=>store.reserveWorkerBudget("cap-test",0.01,0.01),{code:"BUDGET"});
   const row=store.engagement("cap-test");
   assert.ok(Math.abs(row.reserved-0.01)<1e-9);
+});
+
+test("refused dispatch leaves no running lease behind",async t=>{
+  process.env.HH_FAKE_MODE="ok";
+  const manifestPath=path.resolve("examples/local-fixture.json");
+  const manifest=loadManifest(manifestPath).manifest; manifest.engagement="leak-test";
+  manifest.workers={binary:"node",args:[path.resolve("tests/fake-omp.js")]};
+  manifest.limits={requests_per_second:100,wall_clock_minutes:1,max_response_bytes:1000,max_cost_usd:0.01};
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-leak-"))); t.after(()=>store.close());
+  store.createEngagement(manifestPath,manifest);
+  // exhaust the cap deterministically at the store level (no reservation involved)
+  store.db.prepare("UPDATE engagement SET cost_used=0.01 WHERE id=?").run("leak-test");
+  const hypothesis=store.hypothesis(manifest.engagement,"Vendor B read again","denied","compare");
+  await assert.rejects(()=>delegateInvestigation(store,manifest,{hypothesisId:hypothesis,path:"/api/objects/a1",ownerIdentity:"tenant-a-user",otherIdentity:"tenant-b-user",model:null}),{code:"BUDGET"});
+  const running=store.list("task","leak-test").filter(row=>row.state==="running");
+  assert.equal(running.length,0,"no leases may survive a budget refusal");
+  const leaked=store.list("event","leak-test").filter(row=>row.type==="task.pre_dispatch_failed");
+  assert.ok(leaked.length>=1);
+  assert.ok(Math.abs(store.engagement("leak-test").reserved)<1e-9,"no residual reservations");
 });
 
 test("crash recovery charges interrupted reservations as unknown cost",t=>{
