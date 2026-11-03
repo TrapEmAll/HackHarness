@@ -26,7 +26,7 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
   const target=manifest.targets[0], url=new URL(resourcePath,target.origin).href;
   const deadline=Date.now()+manifest.limits.wall_clock_minutes*60_000;
   const actionKey=`authorization:${resourcePath}:${ownerIdentity}:${otherIdentity}`;
-  const taskId=store.task(manifest.engagement,hypothesisId,"investigator",{actionKey,deadlineAt:new Date(deadline).toISOString()}); store.setHypothesis(hypothesisId,"investigating");
+  const taskId=store.task(manifest.engagement,hypothesisId,"investigator",{actionKey,deadlineAt:new Date(deadline).toISOString(),maxRunning:manifest.limits.concurrency}); store.setHypothesis(hypothesisId,"investigating");
   try {
     const gateway=new Gateway(store,manifest); gateway.deadline=deadline;
     const owner=await gateway.request({taskId,identityId:ownerIdentity,url,purpose:"owner baseline"});
@@ -47,7 +47,7 @@ export async function delegateInvestigation(store, manifest, { hypothesisId, pat
   // Independent lease for the worker process; the inner hh_investigate_authorization
   // call re-deduplicates on the normalized action it shares with direct runs.
   const dispatchKey = `worker:${hypothesisId}:${resourcePath}:${ownerIdentity}:${otherIdentity}`;
-  const taskId = store.task(manifest.engagement, hypothesisId, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString() });
+  const taskId = store.task(manifest.engagement, hypothesisId, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
   const modelAlias = model || manifest.workers.routing?.investigator;
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement, "worker.started", taskId, { hypothesis: hypothesisId, model: modelAlias || null, binary: manifest.workers.binary });
@@ -94,7 +94,7 @@ export async function replayFinding(store,manifest,findingId) {
   if (!finding || finding.engagement_id!==manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"),{code:"NOT_FOUND"});
   if (finding.replay.type!=="authorization_read") throw Object.assign(new Error("Unsupported replay type"),{code:"REPLAY"});
   const deadline=Date.now()+manifest.limits.wall_clock_minutes*60_000;
-  const taskId=store.task(manifest.engagement,finding.hypothesis_id,"verifier",{actionKey:`replay:${findingId}`,deadlineAt:new Date(deadline).toISOString()}), gateway=new Gateway(store,manifest); gateway.deadline=deadline;
+  const taskId=store.task(manifest.engagement,finding.hypothesis_id,"verifier",{actionKey:`replay:${findingId}`,deadlineAt:new Date(deadline).toISOString(),maxRunning:manifest.limits.concurrency}), gateway=new Gateway(store,manifest); gateway.deadline=deadline;
   const url=new URL(finding.replay.path,manifest.targets[0].origin).href;
   try {
     const owner=await gateway.request({taskId,identityId:finding.replay.owner_identity,url,purpose:"independent owner replay"});
@@ -104,6 +104,66 @@ export async function replayFinding(store,manifest,findingId) {
     store.finishTask(taskId,"completed"); store.setFinding(findingId,exact?"independently_verified":"stale");
     return {taskId,findingId,state:exact?"independently_verified":"stale",reason:result.reason,evidence:[owner.evidenceId,other.evidenceId]};
   } catch(error) { store.finishTask(taskId,"failed"); throw error; }
+}
+
+export async function autopilot(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, model }) {
+  if (!resourcePath) throw Object.assign(new Error("autopilot requires --path"), { code: "INVALID" });
+  if (!ownerIdentity || !otherIdentity) throw Object.assign(new Error("autopilot requires --owner and --other identities"), { code: "INVALID" });
+  const proposed = store.list("hypothesis", manifest.engagement).filter(row=>row.state==="proposed").map(row=>row.id);
+  // each delegate holds the worker lease plus its inner investigation at peak
+  const waveSize = Math.max(1, Math.floor((manifest.limits.concurrency || 1) / 2));
+  const results = [];
+  for (let at = 0; at < proposed.length; at += waveSize) {
+    const settled = await Promise.allSettled(proposed.slice(at, at + waveSize).map(hypothesisId =>
+      delegateInvestigation(store, manifest, { hypothesisId, path: resourcePath, ownerIdentity, otherIdentity, model })));
+    settled.forEach((outcome, index) => results.push(outcome.status === "fulfilled"
+      ? { hypothesis: proposed[at + index], ...outcome.value }
+      : { hypothesis: proposed[at + index], error: outcome.reason.message, code: outcome.reason.code || "WORKER" }));
+  }
+  const remaining = store.list("hypothesis", manifest.engagement).filter(row=>row.state==="proposed").length;
+  store.event(manifest.engagement, "autopilot.finished", null, { dispatched: proposed.length, results: results.length, remaining });
+  return { dispatched: proposed.length, waveSize, results, remaining };
+}
+
+export async function delegateReplay(store, manifest, { findingId, model }) {
+  const finding = store.findingById(findingId);
+  if (!finding || finding.engagement_id !== manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"), { code: "NOT_FOUND" });
+  if (finding.replay.type !== "authorization_read") throw Object.assign(new Error("Unsupported replay type"), { code: "REPLAY" });
+  const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
+  const dispatchKey = `worker-replay:${findingId}`;
+  const taskId = store.task(manifest.engagement, finding.hypothesis_id, "worker", { actionKey: dispatchKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
+  const modelAlias = model || manifest.workers.routing?.verifier || manifest.workers.routing?.investigator;
+  const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
+  store.event(manifest.engagement, "worker.started", taskId, { hypothesis: finding.hypothesis_id, replay: findingId, model: modelAlias || null, binary: manifest.workers.binary });
+  let outcome, result;
+  try {
+    await worker.start();
+    const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
+    const priorVerifierTasks = new Set(store.list("task", manifest.engagement).filter(row=>row.role==="verifier").map(row=>row.id));
+    const brief = [
+      `You are the HackHarness independent verifier in engagement ${manifest.engagement}.`,
+      `Use ONLY the hh_* tools; you have no other tools.`,
+      `Call hh_replay with finding_id=${findingId}. Report without commentary one final line of JSON: {"findingId":"${findingId}","state":"<resulting state>"}.`,
+    ].join("\n");
+    result = await worker.prompt(brief, { timeoutMs });
+    const stats = await worker.stats();
+    if (stats?.cost !== undefined) store.event(manifest.engagement, "worker.cost", taskId, { cost: stats.cost, tokens: stats.tokens?.total });
+    if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`), { code: result.failure?.code || "WORKER" });
+    const verifier = store.list("task", manifest.engagement).find(row=>row.role==="verifier" && !priorVerifierTasks.has(row.id));
+    if (!verifier) throw Object.assign(new Error("Worker verifier turn completed without creating a replay task"), { code: "WORKER" });
+    const replayed = store.findingById(findingId);
+    outcome = { taskId, workerState: "completed", verifierTaskId: verifier.id, replayState: replayed?.state, cost: stats?.cost ?? null };
+    store.finishTask(taskId, "completed");
+    store.event(manifest.engagement, "worker.completed", taskId, { ...outcome, text: result.text });
+  } catch (error) {
+    store.finishTask(taskId, "failed");
+    store.event(manifest.engagement, "worker.failed", taskId, { error: error.message, code: error.code, text: result?.text });
+    outcome = { taskId, state: "failed", error: error.message, code: error.code || "WORKER" };
+    throw error;
+  } finally {
+    await worker.close();
+  }
+  return outcome;
 }
 
 export function reviewFinding(store,manifest,findingId,decision,notes="") {

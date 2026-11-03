@@ -39,3 +39,13 @@ test("interrupted tasks are recovered with incremented attempts and dedup is enf
   const events=store.list("event","task-test");
   assert.ok(events.some(row=>row.type==="task.recovered"));
 });
+
+test("concurrency limits dispatch when running tasks reach the cap",t=>{
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-conc-"))); t.after(()=>store.close());
+  const manifest={engagement:"conc-test"}; store.createEngagement("fixture.json",manifest);
+  const first=store.task("conc-test",null,"investigator",{actionKey:"a",maxRunning:1});
+  assert.throws(()=>store.task("conc-test",null,"investigator",{actionKey:"b",maxRunning:1}),{code:"CONCURRENCY"});
+  store.finishTask(first,"completed");
+  const second=store.task("conc-test",null,"investigator",{actionKey:"b",maxRunning:1});
+  assert.throws(()=>store.task("conc-test",null,"verifier",{actionKey:"c",maxRunning:1}),{code:"CONCURRENCY"});
+});
