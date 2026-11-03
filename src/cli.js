@@ -2,11 +2,11 @@
 import { loadManifest } from "./manifest.js";
 import { Store } from "./store.js";
 import { runtime } from "./runtime.js";
-import { exportReport, investigateAuthorization, replayFinding, reviewFinding, delegateInvestigation, delegateReplay } from "./workflow.js";
+import { exportReport, investigateAuthorization, replayFinding, reviewFinding, delegateInvestigation, delegateReplay, autopilot } from "./workflow.js";
 import { json } from "./util.js";
 
 function usage() {
-  console.log(`HackHarness\n\n  hh open MANIFEST [--data DIR]\n  hh context MANIFEST [--data DIR]\n  hh hypothesis MANIFEST --claim TEXT --control TEXT --check TEXT [--data DIR]\n  hh hypotheses MANIFEST [--data DIR]\n  hh findings MANIFEST [--data DIR]\n  hh tasks MANIFEST [--data DIR]\n  hh investigate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--data DIR]\n  hh delegate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--model ALIAS] [--data DIR]\n  hh replay MANIFEST FINDING [--data DIR]\n  hh verify MANIFEST FINDING [--model ALIAS] [--data DIR]\n  hh review MANIFEST FINDING --decision approve|reject [--notes TEXT] [--data DIR]\n  hh evidence MANIFEST EVIDENCE [--data DIR]\n  hh report MANIFEST FINDING [--data DIR]\n  hh pause MANIFEST [--data DIR]\n  hh resume MANIFEST [--data DIR]`);
+  console.log(`HackHarness\n\n  hh open MANIFEST [--data DIR]\n  hh context MANIFEST [--data DIR]\n  hh hypothesis MANIFEST --claim TEXT --control TEXT --check TEXT [--data DIR]\n  hh hypotheses MANIFEST [--data DIR]\n  hh findings MANIFEST [--data DIR]\n  hh tasks MANIFEST [--data DIR]\n  hh investigate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--data DIR]\n  hh autopilot MANIFEST --path PATH --owner ID --other ID [--model ALIAS] [--data DIR]\n  hh delegate MANIFEST HYPOTHESIS --path PATH --owner ID --other ID [--model ALIAS] [--data DIR]\n  hh replay MANIFEST FINDING [--data DIR]\n  hh verify MANIFEST FINDING [--model ALIAS] [--data DIR]\n  hh review MANIFEST FINDING --decision approve|reject [--notes TEXT] [--data DIR]\n  hh evidence MANIFEST EVIDENCE [--data DIR]\n  hh report MANIFEST FINDING [--data DIR]\n  hh pause MANIFEST [--data DIR]\n  hh resume MANIFEST [--data DIR]`);
 }
 function option(args,name,required=true) { const at=args.indexOf(name); if(at<0){if(required)throw new Error(`Missing ${name}`);return null;} return args[at+1]; }
 function cleanArgs(args) { const data=option(args,"--data",false); return {data,args:args.filter((x,i)=>x!=="--data"&&args[i-1]!=="--data")}; }
@@ -24,6 +24,7 @@ async function main() {
     else if(command==="tasks") console.log(json(store.list("task",manifest.engagement).map(row=>({id:row.id,role:row.role,state:row.state,attempt:row.attempt,action_key:row.action_key,deadline_at:row.deadline_at,created_at:row.created_at,completed_at:row.completed_at}))));
     else if(command==="investigate") console.log(json(await investigateAuthorization(store,manifest,{hypothesisId:args[1],path:option(args,"--path"),ownerIdentity:option(args,"--owner"),otherIdentity:option(args,"--other")})));
     else if(command==="delegate") console.log(json(await delegateInvestigation(store,manifest,{hypothesisId:args[1],path:option(args,"--path"),ownerIdentity:option(args,"--owner"),otherIdentity:option(args,"--other"),model:option(args,"--model",false)})));
+    else if(command==="autopilot") console.log(json(await autopilot(store,manifest,{path:option(args,"--path"),ownerIdentity:option(args,"--owner"),otherIdentity:option(args,"--other"),model:option(args,"--model",false)})));
     else if(command==="replay") console.log(json(await replayFinding(store,manifest,args[1])));
     else if(command==="verify") console.log(json(await delegateReplay(store,manifest,{findingId:args[1],model:option(args,"--model",false)})));
     else if(command==="review") console.log(json(reviewFinding(store,manifest,args[1],option(args,"--decision"),option(args,"--notes",false)||"")));

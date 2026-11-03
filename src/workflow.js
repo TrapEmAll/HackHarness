@@ -106,6 +106,25 @@ export async function replayFinding(store,manifest,findingId) {
   } catch(error) { store.finishTask(taskId,"failed"); throw error; }
 }
 
+export async function autopilot(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, model }) {
+  if (!resourcePath) throw Object.assign(new Error("autopilot requires --path"), { code: "INVALID" });
+  if (!ownerIdentity || !otherIdentity) throw Object.assign(new Error("autopilot requires --owner and --other identities"), { code: "INVALID" });
+  const proposed = store.list("hypothesis", manifest.engagement).filter(row=>row.state==="proposed").map(row=>row.id);
+  // each delegate holds the worker lease plus its inner investigation at peak
+  const waveSize = Math.max(1, Math.floor((manifest.limits.concurrency || 1) / 2));
+  const results = [];
+  for (let at = 0; at < proposed.length; at += waveSize) {
+    const settled = await Promise.allSettled(proposed.slice(at, at + waveSize).map(hypothesisId =>
+      delegateInvestigation(store, manifest, { hypothesisId, path: resourcePath, ownerIdentity, otherIdentity, model })));
+    settled.forEach((outcome, index) => results.push(outcome.status === "fulfilled"
+      ? { hypothesis: proposed[at + index], ...outcome.value }
+      : { hypothesis: proposed[at + index], error: outcome.reason.message, code: outcome.reason.code || "WORKER" }));
+  }
+  const remaining = store.list("hypothesis", manifest.engagement).filter(row=>row.state==="proposed").length;
+  store.event(manifest.engagement, "autopilot.finished", null, { dispatched: proposed.length, results: results.length, remaining });
+  return { dispatched: proposed.length, waveSize, results, remaining };
+}
+
 export async function delegateReplay(store, manifest, { findingId, model }) {
   const finding = store.findingById(findingId);
   if (!finding || finding.engagement_id !== manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"), { code: "NOT_FOUND" });

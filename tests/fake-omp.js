@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Minimal OMP RPC wire fake for HackHarness contract tests.
 // HH_FAKE_MODE: ok (normal run) | stuck (never finishes until aborted)
-const mode = process.env.HH_FAKE_MODE || "ok"; // ok | stuck | dud
+const mode = process.env.HH_FAKE_MODE || "ok"; // ok | stuck | dud | failfirst
 const out = (frame) => { try { process.stdout.write(JSON.stringify(frame) + "\n"); } catch {} };
 out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
 let streaming = null;
@@ -19,14 +19,20 @@ process.stdin.on("data", chunk => {
     if (frame.type === "prompt") {
       const id = frame.id;
       out({ id, type: "response", command: "prompt", success: true, data: { agentInvoked: true } });
-      if (mode === "ok") {
+      if (mode === "stuck") { streaming = id; return; } // waits for abort
+      const promptNumber = Number((process.env.HH_FAKE_PROMPT = String(Number(process.env.HH_FAKE_PROMPT || 0) + 1)));
+      if (mode === "failfirst" && promptNumber > 1) {
+        out({ type: "agent_end", messages: [], isTerminal: true });
+        out({ id, type: "prompt_result", agentInvoked: true });
+      } else if (mode === "dud" || (mode === "failfirst" && promptNumber > 0)) {
         out({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "worker said hi " } });
         out({ type: "agent_end", messages: [], isTerminal: true });
         out({ id, type: "prompt_result", agentInvoked: true });
-      } else if (mode === "dud") {
+      } else {
+        out({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "worker said hi " } });
         out({ type: "agent_end", messages: [], isTerminal: true });
         out({ id, type: "prompt_result", agentInvoked: true });
-      } else { streaming = id; } // stuck: waits for abort
+      }
     } else if (frame.type === "abort") {
       streaming = null;
       out({ id: frame.id, type: "response", command: "abort", success: true });

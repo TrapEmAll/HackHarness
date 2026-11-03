@@ -62,6 +62,8 @@ Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/
 
 `hh verify MANIFEST FINDING [--model ALIAS]` delegates independent replay to a separate OMP worker under a `worker-replay:<finding>` lease: the worker's only applicable tool is `hh_replay`, success requires a verifier task created after the dispatch, and the resulting finding state (`independently_verified`/`stale`) is returned with the session cost. Verifier routing prefers `workers.routing.verifier`, falling back to `workers.routing.investigator`.
 
+`hh autopilot MANIFEST --path PATH --owner ID --other ID [--model ALIAS]` dispatches every `proposed` hypothesis through `hh delegate` in waves bounded by `limits.concurrency` (a wave holds `floor(concurrency / 2)` delegates since each delegate occupies its worker lease and inner investigation at peak). It returns one outcome per hypothesis — worker state, inner task, finding state, cost, or the failing error code — plus the number of hypotheses that remain `proposed`. Over-cap workers report `CONCURRENCY` instead of crashing the run; interrupted leases recover on the next command as usual.
+
 `limits.concurrency` (default 2) caps simultaneously `running` tasks per engagement across all roles; further dispatches fail with `CONCURRENCY` until a task completes or is recovered. Each delegate counts its worker lease and the inner investigation as two of those slots while in flight.
 
 Manifest additions:
@@ -98,8 +100,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow) and most of milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery, engagement concurrency caps, bounded OMP worker dispatch for investigation and independent verification with model routing and cost caps). Not yet implemented: parallel worker pools with centralized scheduling, browser work, and benchmarks.
+Implemented from the release sequence: milestone 1 (one complete local workflow) and milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps). Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, and benchmarks.
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons, including OMP-worker delegation of both investigation and independent verification. Browser automation, state-changing playbooks, encrypted raw capture retention, multi-worker pools with centralized scheduling, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons, including OMP-worker delegation of both investigation and independent verification. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
