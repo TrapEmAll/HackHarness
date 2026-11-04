@@ -28,8 +28,14 @@ function pinnedRequest(url, { method, headers, body, addresses, maxBytes, timeou
 
 export class Gateway {
   constructor(store, manifest) { this.store=store; this.manifest=manifest; this.lastRequestAt=0; this.deadline=Infinity; }
+  assertLeaseActive(taskId) {
+    if (!taskId) return;
+    const state=this.store.taskState(taskId);
+    if (state!=="running") throw Object.assign(new Error(`Task lease ${taskId} is no longer active (${state ?? "missing"}); target access is fenced`), { code:"BUDGET" });
+  }
   async request({ taskId, identityId, url, method="GET", headers={}, body=null, purpose="investigation" }) {
     if (Date.now()>this.deadline) throw Object.assign(new Error("Task wall-clock deadline exceeded"), { code:"BUDGET" });
+    this.assertLeaseActive(taskId);
     const identity=this.manifest.identities.find(item=>item.id===identityId);
     if (!identity) throw Object.assign(new Error(`Unknown identity ${identityId}`),{code:"IDENTITY"});
     const secret=identitySecret(identity);
@@ -37,11 +43,16 @@ export class Gateway {
     while (true) {
       const match=matchTarget(this.manifest,current,currentMethod);
       const resolved=await resolveTarget(match.target,match.url);
-      this.store.incrementRequests(this.manifest.engagement,match.target.id,match.target.request_limit);
+      this.assertLeaseActive(taskId);
       const interval=1000/this.manifest.limits.requests_per_second;
       const wait=Math.max(0,this.lastRequestAt+interval-Date.now());
       if (wait) await new Promise(resolve=>setTimeout(resolve,wait));
       this.lastRequestAt=Date.now();
+      // re-fence after the wait: a paused or revoked lease cannot reach the
+      // wire even if it was granted earlier in this loop
+      this.assertLeaseActive(taskId);
+      this.store.incrementRequests(this.manifest.engagement,match.target.id,match.target.request_limit);
+      if (taskId) this.store.heartbeat(taskId);
       const requestHeaders={...headers,"user-agent":"HackHarness/0.1"};
       if (match.url.origin===firstOrigin) requestHeaders.authorization=`Bearer ${secret}`;
       const response=await pinnedRequest(match.url,{method:currentMethod,headers:requestHeaders,body,addresses:resolved,maxBytes:this.manifest.limits.max_response_bytes});

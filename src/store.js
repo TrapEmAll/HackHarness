@@ -23,6 +23,7 @@ export class Store {
       ["task","action_key","ALTER TABLE task ADD COLUMN action_key TEXT"],
       ["task","deadline_at","ALTER TABLE task ADD COLUMN deadline_at TEXT"],
       ["task","cost_reserved","ALTER TABLE task ADD COLUMN cost_reserved REAL NOT NULL DEFAULT 0"],
+      ["task","heartbeat_at","ALTER TABLE task ADD COLUMN heartbeat_at TEXT"],
       ["engagement","cost_used","ALTER TABLE engagement ADD COLUMN cost_used REAL NOT NULL DEFAULT 0"],
       ["engagement","cost_unknown","ALTER TABLE engagement ADD COLUMN cost_unknown INTEGER NOT NULL DEFAULT 0"],
       ["engagement","reserved","ALTER TABLE engagement ADD COLUMN reserved REAL NOT NULL DEFAULT 0"],
@@ -87,13 +88,18 @@ export class Store {
       this.db.prepare("UPDATE task SET cost_reserved=0 WHERE id=?").run(taskId);
     } finally { this.db.exec("COMMIT"); }
   }
-  recover(engagement) {
-    const running = this.db.prepare("SELECT id, cost_reserved FROM task WHERE engagement_id=? AND state='running'").all(engagement);
+  // Leases are invalidated only after their heartbeat (or creation) goes stale:
+  // a live worker process must not be orphaned by another process's reopen.
+  heartbeat(taskId) { this.db.prepare("UPDATE task SET heartbeat_at=? WHERE id=?").run(now(),taskId); }
+  recover(engagement, { staleSeconds = 120 } = {}) {
+    const cutoff = new Date(Date.now() - staleSeconds * 1000).toISOString();
+    const running = this.db.prepare("SELECT id, cost_reserved FROM task WHERE engagement_id=? AND state='running' AND COALESCE(heartbeat_at,created_at) <= ?").all(engagement,cutoff);
     for (const row of running) this.settleTaskCost(row.id, null);
     for (const row of running) this.db.prepare("UPDATE task SET state='interrupted',completed_at=? WHERE id=?").run(now(),row.id);
     if (running.length) this.event(engagement,"task.recovered",engagement,{interrupted:running.map(row=>row.id)});
     return running.length;
   }
+  taskState(taskId) { const row=this.db.prepare("SELECT state FROM task WHERE id=?").get(taskId); return row?.state ?? null; }
   hypothesis(engagement, claim, control, proposedCheck) {
     const value = id("H");
     this.db.prepare("INSERT INTO hypothesis VALUES(?,?,?,?,?,?,?)").run(value,engagement,claim,control,proposedCheck,"proposed",now());
@@ -115,7 +121,11 @@ export class Store {
     this.event(engagement,"task.started",value,{role,hypothesis,attempt,action_key:key,deadline_at:deadlineAt||null});
     return value;
   }
-  finishTask(value,state) { this.db.prepare("UPDATE task SET state=?,completed_at=? WHERE id=?").run(state,now(),value); }
+  finishTask(value,state) {
+    // a lease revoked by another process must not be resurrected on completion
+    const result=this.db.prepare("UPDATE task SET state=?,completed_at=? WHERE id=? AND state='running'").run(state,now(),value);
+    return result.changes>0;
+  }
   evidence(engagement, task, kind, content, metadata) {
     const value=id("E"), digest=sha256(content), relative=`artifacts/${value}.json`;
     atomicWrite(path.join(this.root,relative),content);

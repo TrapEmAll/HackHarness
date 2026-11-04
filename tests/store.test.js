@@ -19,6 +19,22 @@ test("per-target request budgets are enforced atomically",t=>{
   assert.equal(store.requestsUsed("budget-test"),3);
 });
 
+test("revocation (pause fence + recovery) refuses the gateway and settles reservations",t=>{
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-pause-"))); t.after(()=>store.close());
+  store.createEngagement("fixture.json",{engagement:"pause-test"});
+  const taskId=store.task("pause-test",null,"worker",{actionKey:"live",deadlineAt:null});
+  store.reserveWorkerBudget("pause-test",0.05,0.01,taskId);
+  store.pause("pause-test",true);
+  assert.throws(()=>store.incrementRequests("pause-test","t1",10),{code:"BUDGET"});
+  assert.equal(store.recover("pause-test",{staleSeconds:0}),1);
+  const row=store.engagement("pause-test");
+  assert.ok(Math.abs(row.cost_used-0.01)<1e-9,"open reservation charged as unknown spend on revocation");
+  assert.equal(row.cost_unknown,1);
+  assert.ok(Math.abs(row.reserved)<1e-9);
+  const events=store.list("event","pause-test").map(e=>e.type);
+  assert.ok(events.includes("task.recovered"));
+});
+
 test("interrupted tasks are recovered with incremented attempts and dedup is enforced",t=>{
   const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-task-"))); t.after(()=>store.close());
   const manifest={engagement:"task-test"}; store.createEngagement("fixture.json",manifest);
@@ -31,7 +47,7 @@ test("interrupted tasks are recovered with incremented attempts and dedup is enf
   store.finishTask(first,"completed");
   const retried=store.task("task-test",null,"investigator",{actionKey:key});
   assert.equal(taskRow(retried).attempt,2);
-  assert.equal(store.recover("task-test"),2);
+  assert.equal(store.recover("task-test",{staleSeconds:0}),2);
   const recovered=taskRow(retried);
   assert.equal(recovered.state,"interrupted");
   const resumed=store.task("task-test",null,"investigator",{actionKey:key});

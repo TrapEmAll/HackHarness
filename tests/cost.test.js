@@ -89,7 +89,7 @@ test("crash recovery charges interrupted reservations as unknown cost",t=>{
   store.createEngagement("fixture.json",{engagement:"crash-cost"});
   const taskId=store.task("crash-cost",null,"worker",{actionKey:"leak"});
   store.reserveWorkerBudget("crash-cost",0.05,0.02,taskId);
-  assert.equal(store.recover("crash-cost"),1);
+  assert.equal(store.recover("crash-cost",{staleSeconds:0}),1);
   const row=store.engagement("crash-cost");
   assert.ok(Math.abs(row.cost_used-0.02)<1e-9);
   assert.equal(row.cost_unknown,1);

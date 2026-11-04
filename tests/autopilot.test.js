@@ -59,7 +59,7 @@ test("killing a delegate mid-run yields an interrupted lease that re-dispatches 
   child.kill("SIGKILL");
   await new Promise(r=>child.once("exit",r));
   // reopen like any later assignment command would
-  const reopened=new Store(root), interrupted=reopened.recover("crash-test");
+  const reopened=new Store(root), interrupted=reopened.recover("crash-test",{staleSeconds:0});
   reopened.close();
   assert.equal(interrupted,1);
   const events=store.list("event","crash-test").map(row=>row.type);

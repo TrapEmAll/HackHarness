@@ -43,7 +43,7 @@ async function main() {
     else if(command==="assess") console.log(json(await delegateReview(store,manifest,{findingId:args[1],model:option(args,"--model",false)})));
     else if(command==="evidence") { const row=store.readEvidence(args[1]); if(!row)throw Object.assign(new Error("Evidence not found"),{code:"NOT_FOUND"}); console.log(json(row)); }
     else if(command==="report") console.log(json({path:exportReport(store,manifest,args[1])}));
-    else if(command==="pause"||command==="resume") { store.pause(manifest.engagement,command==="pause"); console.log(json({engagement:manifest.engagement,state:command==="pause"?"paused":"open"})); }
+    else if(command==="pause"||command==="resume") { store.pause(manifest.engagement,command==="pause"); console.log(json({engagement:manifest.engagement,state:command==="pause"?"paused":"open",gatewayBlocked:command==="pause"})); }
     else { usage(); process.exitCode=2; }
   } finally { store.close(); }
 }

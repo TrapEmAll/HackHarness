@@ -42,7 +42,7 @@ const role = process.env.HH_ROLE || "all";
 const roleTools: Record<string, string[] | null> = {
 	all: null,
 	reviewer: ["hh_context", "hh_findings", "hh_evidence_read", "hh_source_read"],
-	mapper: ["hh_context", "hh_source_read"],
+	mapper: ["hh_context", "hh_source_read", "hh_map_query", "hh_hypothesis_submit"],
 };
 const roleAllow = roleTools[role] ?? roleTools.all;
 
@@ -72,6 +72,12 @@ export default function hackHarness(pi: ExtensionAPI): void {
 			description: "List persisted findings with title, state, impact, and timestamps for duplication checks.",
 			parameters: z.object({}), approval: "read" as const,
 			async execute(_id: string, _params: object, signal?: AbortSignal) { return content(await hh(["findings"], signal)); },
+		},
+		hh_map_query: {
+			label: "Query application map",
+			description: "Read recorded application-map observations (endpoint probes, authorization diffs) with their evidence references.",
+			parameters: z.object({}), approval: "read" as const,
+			async execute(_id: string, _params: object, signal?: AbortSignal) { return content(await hh(["observations"], signal)); },
 		},
 		hh_replay: {
 			label: "Replay finding",

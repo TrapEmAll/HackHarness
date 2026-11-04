@@ -76,8 +76,10 @@ export async function delegateReview(store, manifest, { findingId, model } = {})
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, role: "reviewer", env: { ...process.env, HH_ROLE: "reviewer", HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement,"reviewer.started",taskId,{finding:findingId,model:modelAlias||null});
   let result, started=false;
+  let beat;
   try {
     await worker.start(); started=true;
+    beat=setInterval(()=>store.heartbeat(taskId),30_000);
     const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
     const brief = [
       `You are the HackHarness reviewer for finding ${findingId} in engagement ${manifest.engagement}.`,
@@ -104,6 +106,7 @@ export async function delegateReview(store, manifest, { findingId, model } = {})
     store.event(manifest.engagement,"worker.failed",taskId,{error:error.message,code:error.code,text:result?.text});
     throw error;
   } finally {
+    clearInterval(beat);
     await worker.close();
   }
 }
@@ -123,8 +126,10 @@ export async function delegateInvestigation(store, manifest, { hypothesisId, pat
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement, "worker.started", taskId, { hypothesis: hypothesisId, model: modelAlias || null, binary: manifest.workers.binary });
   let outcome, result, started=false;
+  let beat;
   try {
     await worker.start(); started=true;
+    beat=setInterval(()=>store.heartbeat(taskId),30_000);
     const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
     const priorInvestigatorTasks = new Set(store.list("task", manifest.engagement).filter(row=>row.role==="investigator").map(row=>row.id));
     const priorFindings = new Set(store.list("finding", manifest.engagement).map(row=>row.id));
@@ -157,6 +162,7 @@ export async function delegateInvestigation(store, manifest, { hypothesisId, pat
     outcome = { taskId, state: "failed", error: error.message, code: error.code || "WORKER" };
     throw error;
   } finally {
+    clearInterval(beat);
     await worker.close();
   }
   return outcome;
@@ -308,8 +314,10 @@ export async function delegateReplay(store, manifest, { findingId, model }) {
   const worker = new RpcWorker({ binary: manifest.workers.binary, args: manifest.workers.args || [], model: modelAlias, maxCostUsd: Number.isFinite(allocation) ? allocation : manifest.limits.max_cost_usd, extension: HH_ADAPTER, yolo: true, env: { ...process.env, HH_MANIFEST: store.engagement(manifest.engagement).manifest_path, HH_DATA_DIR: store.root } });
   store.event(manifest.engagement, "worker.started", taskId, { hypothesis: finding.hypothesis_id, replay: findingId, model: modelAlias || null, binary: manifest.workers.binary });
   let outcome, result, started=false;
+  let beat;
   try {
     await worker.start(); started=true;
+    beat=setInterval(()=>store.heartbeat(taskId),30_000);
     const timeoutMs = Math.max(0, deadline - Date.now()) || 30_000;
     const priorVerifierTasks = new Set(store.list("task", manifest.engagement).filter(row=>row.role==="verifier").map(row=>row.id));
     const brief = [
@@ -335,6 +343,7 @@ export async function delegateReplay(store, manifest, { findingId, model }) {
     outcome = { taskId, state: "failed", error: error.message, code: error.code || "WORKER" };
     throw error;
   } finally {
+    clearInterval(beat);
     await worker.close();
   }
   return outcome;
