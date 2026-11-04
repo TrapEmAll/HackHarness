@@ -154,8 +154,9 @@ export async function delegateInvestigation(store, manifest, { hypothesisId, pat
     if (stats?.cost !== undefined) store.event(manifest.engagement, "worker.cost", taskId, { cost: stats.cost, tokens: stats.tokens?.total });
     if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`), { code: result.failure?.code || "WORKER" });
     const inner = store.list("task", manifest.engagement).find(row=>row.role==="investigator" && !priorInvestigatorTasks.has(row.id));
-    const finding = store.list("finding", manifest.engagement).find(row=>!priorFindings.has(row.id));
     if (!inner) throw Object.assign(new Error("Worker turn completed without creating an investigation task for its action"), { code: "WORKER" });
+    if (inner.state !== "completed") throw Object.assign(new Error(`Worker's internal investigation did not complete (${inner.state}); outcome discarded`), { code: "WORKER" });
+    const finding = store.list("finding", manifest.engagement).find(row=>!priorFindings.has(row.id));
     store.settleTaskCost(taskId, stats?.cost ?? null);
     outcome = {
       taskId, workerState: "completed", model: modelAlias || null,
@@ -292,7 +293,9 @@ export async function benchmark(store, manifest, { path: resourcePath, ownerIden
         if (result.state === "reproduced") reproduced++;
         if (replayState === "independently_verified") verified++;
       }
-      rows.push({ trial, state: result.state, findingId: result.findingId ?? result.finding?.id ?? null, replayState });
+      rows.push(workers
+        ? { trial, state: result.workerState, innerTaskId: result.innerTaskId, findingId: result.finding?.id ?? null, replayState }
+        : { trial, state: result.state, findingId: result.findingId, replayState });
     } catch (error) {
       if (error.code === "SCOPE") scopeViolations++;
       rows.push({ trial, error: error.code || "ERROR" });
@@ -301,8 +304,12 @@ export async function benchmark(store, manifest, { path: resourcePath, ownerIden
   const requests = store.requestsUsed(engagement) - startedAt;
   const elapsed = Date.now() - startedMS;
   const cost = store.engagement(engagement);
+  // a worker trial is only complete when its worker and inner investigators both finished
+  const incomplete = workers
+    ? rows.filter(row=>row.error || row.state!=="completed").length
+    : rows.filter(row=>row.error).length;
   const summary = {
-    trials: rounds, denominator: rounds, incomplete: rows.filter(row=>row.error).length,
+    trials: rounds, denominator: rounds, incomplete,
     reproduced, independently_verified: verified,
     precision_of_supported_claims: verified / (verified + rows.filter(row=>row.state==="rejected").length || 1),
     requests_per_trial: Number((requests / rounds).toFixed(2)),
@@ -396,6 +403,7 @@ export async function delegateReplay(store, manifest, { findingId, model }) {
     if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`), { code: result.failure?.code || "WORKER" });
     const verifier = store.list("task", manifest.engagement).find(row=>row.role==="verifier" && !priorVerifierTasks.has(row.id));
     if (!verifier) throw Object.assign(new Error("Worker verifier turn completed without creating a replay task"), { code: "WORKER" });
+    if (verifier.state !== "completed") throw Object.assign(new Error(`Worker's internal verification did not complete (${verifier.state}); outcome discarded`), { code: "WORKER" });
     store.settleTaskCost(taskId, stats?.cost ?? null);
     const replayed = store.findingById(findingId);
     outcome = { taskId, workerState: "completed", verifierTaskId: verifier.id, replayState: replayed?.state, cost: stats?.cost ?? null, reservation: allocation };
