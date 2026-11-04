@@ -79,6 +79,16 @@ export default function hackHarness(pi: ExtensionAPI): void {
 			parameters: z.object({}), approval: "read" as const,
 			async execute(_id: string, _params: object, signal?: AbortSignal) { return content(await hh(["observations"], signal)); },
 		},
+		hh_request: {
+			label: "Scoped single request",
+			description: "Issue one in-scope HTTP request as a declared identity through the policy, budgets, redaction, and evidence capture. Creates its own short-lived lease; concurrent duplicates are refused.",
+			parameters: z.object({ identity_id:z.string(), path:z.string(), method:z.string().optional(), purpose:z.string().optional() }), approval: "exec" as const,
+			async execute(_id: string, params: { identity_id: string; path: string; method?: string; purpose?: string }, signal?: AbortSignal) {
+				const args = ["request","--identity",params.identity_id,"--path",params.path,"--purpose",params.purpose || "manual scoped request"];
+				if (params.method) args.push("--method", params.method);
+				return content(await hh(args, signal));
+			},
+		},
 		hh_replay: {
 			label: "Replay finding",
 			description: "Independently replay a candidate finding with fresh owner and negative-control captures.",

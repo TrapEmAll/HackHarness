@@ -314,6 +314,31 @@ export async function autopilot(store, manifest, { path: resourcePath, ownerIden
   return { dispatched: proposed.length, waveSize, results, remaining };
 }
 
+// Single scoped request on behalf of an agent. Own budget-deducted lease with
+// an action key deduplicated per identity/method/path; evidence is captured by
+// the gateway as always, so redaction and fencing apply unchanged.
+export async function rawRequest(store, manifest, { identityId, path: resourcePath, method="GET", purpose="manual scoped request", body } = {}) {
+  const identity = manifest.identities.find(item=>item.id===identityId);
+  if (!identity) throw Object.assign(new Error(`Unknown identity ${identityId}`), { code: "IDENTITY" });
+  const normMethod = String(method).toUpperCase();
+  const effectiveBody = body === undefined || body === null ? undefined : body;
+  if (effectiveBody !== undefined && !["POST","PUT","PATCH","DELETE"].includes(normMethod)) throw Object.assign(new Error("Only state-changing methods carry bodies"), { code: "INVALID" });
+  if (!manifest.targets.some(target=>target.methods.includes(normMethod))) throw Object.assign(new Error(`Method ${normMethod} is not declared on any target`), { code: "SCOPE" });
+  const deadline = Date.now() + manifest.limits.wall_clock_minutes * 60_000;
+  const actionKey = `request:${normMethod}:${identityId}:${resourcePath}`;
+  const taskId = store.task(manifest.engagement, null, "requester", { actionKey, deadlineAt: new Date(deadline).toISOString(), maxRunning: manifest.limits.concurrency });
+  try {
+    const gateway = new Gateway(store, manifest); gateway.deadline = deadline;
+    const url = new URL(resourcePath, manifest.targets[0].origin).href;
+    const capture = await gateway.request({ taskId, identityId, url, method: normMethod, body: effectiveBody ?? null, purpose });
+    if (!store.claimCompletion(taskId, "completed")) return { taskId, state: "fenced", reason: "lease revoked before this capture could be recorded", evidence: [capture.evidenceId] };
+    return { taskId, state: "captured", status: capture.status, evidenceId: capture.evidenceId, reason: purpose };
+  } catch (error) {
+    store.finishTask(taskId, "failed");
+    throw error;
+  }
+}
+
 export async function delegateReplay(store, manifest, { findingId, model }) {
   const finding = store.findingById(findingId);
   if (!finding || finding.engagement_id !== manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"), { code: "NOT_FOUND" });
