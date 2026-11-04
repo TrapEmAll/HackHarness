@@ -39,6 +39,13 @@ export class Store {
     else this.db.prepare("INSERT INTO engagement(id,manifest_path,manifest_json,created_at) VALUES(?,?,?,?)").run(manifest.engagement,manifestPath,json(manifest),now());
     this.event(manifest.engagement,"engagement.opened",manifest.engagement,{manifest_path:manifestPath});
   }
+  // Updates only the manifest pointer for an existing engagement; budgets,
+  // pause state, and targets accounting stay untouched (used when a derived
+  // benchmark manifest gets rematerialized between runs).
+  refreshManifestContext(engagement, manifestPath, manifest) {
+    this.db.prepare("UPDATE engagement SET manifest_path=?,manifest_json=? WHERE id=?").run(manifestPath,json(manifest),engagement);
+    this.event(engagement,"engagement.manifest_refreshed",engagement,{manifest_path:manifestPath});
+  }
   engagement(idValue) { return this.db.prepare("SELECT * FROM engagement WHERE id=?").get(idValue); }
   incrementRequests(engagement, targetId, targetLimit) {
     const row = this.engagement(engagement);

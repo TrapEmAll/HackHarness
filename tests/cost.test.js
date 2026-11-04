@@ -120,3 +120,26 @@ test("crash recovery charges interrupted reservations as unknown cost",t=>{
   assert.equal(row.reserved,0);
   assert.equal(store.list("task","crash-cost").find(r=>r.id===taskId).cost_reserved,0);
 });
+
+test("derived benchmark manifest is refreshed materialized beside the original",async t=>{
+  process.env.HH_FAKE_MODE="dud";
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"hh-bm-"));
+  const manifestPath=path.join(dir,"manifest.json");
+  const manifest=loadManifest(path.resolve("examples/local-fixture.json")).manifest;
+  manifest.authorization.reference=path.resolve("examples/authorization.md");
+  manifest.workers={binary:"node",args:[path.resolve("tests/fake-omp.js")]};
+  manifest.limits={requests_per_second:100,wall_clock_minutes:1,max_response_bytes:1000,max_cost_usd:5,cost_reserve_usd:0.005};
+  const benchManifest1={...manifest,engagement:"bm-test"};
+  fs.writeFileSync(manifestPath,JSON.stringify({...manifest,sources:[]}));
+  const store=new Store(path.join(dir,"data")); t.after(()=>store.close());
+  // first direct run creates the engagement pointing at the original manifest
+  const direct=await benchmark(store,benchManifest1,{path:"/api/objects/a1",ownerIdentity:"tenant-a-user",otherIdentity:"tenant-b-user",manifestPath});
+  assert.equal(direct.mode,"playbook");
+  // second (worker) run with a rematerialized manifest updates the pointer
+  const derivedPath=path.join(dir,"manifest-bench-vulnerable.json");
+  fs.writeFileSync(derivedPath,JSON.stringify(benchManifest1));
+  await benchmark(store,benchManifest1,{path:"/api/objects/a1",ownerIdentity:"tenant-a-user",otherIdentity:"tenant-b-user",manifestPath:derivedPath,workers:true});
+  assert.equal(store.engagement("bm-test").manifest_path,derivedPath);
+  const events=store.list("event","bm-test").map(row=>row.type);
+  assert.ok(events.includes("engagement.manifest_refreshed"));
+});

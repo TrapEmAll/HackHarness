@@ -262,6 +262,12 @@ export async function benchmark(store, manifest, { path: resourcePath, ownerIden
   const rounds = Math.max(1, Math.round(trials));
   const engagement = manifest.engagement;
   if (!store.engagement(engagement)) store.createEngagement(manifestPath || `${engagement}.json`, manifest);
+  else if (manifestPath) {
+    // materialized/derived manifests may change between runs; refresh the row's
+    // manifest context without touching budgets or pause state
+    const row = store.engagement(engagement);
+    if (row.manifest_path !== manifestPath) store.refreshManifestContext(engagement, manifestPath, manifest);
+  }
   const startedAt = store.requestsUsed(engagement), startedMS = Date.now();
   const startedCost = store.engagement(engagement);
   let scopeViolations = 0, reproduced = 0, verified = 0;

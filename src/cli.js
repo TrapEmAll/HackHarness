@@ -3,6 +3,7 @@ import { loadManifest } from "./manifest.js";
 import { Store } from "./store.js";
 import { runtime } from "./runtime.js";
 import path from "node:path";
+import fs from "node:fs";
 import { exportReport, investigateAuthorization, replayFinding, reviewFinding, delegateInvestigation, delegateReplay, autopilot, mapEngagement, benchmark, delegateReview, readSource, rawRequest } from "./workflow.js";
 import { json } from "./util.js";
 
@@ -16,6 +17,15 @@ function benchManifest(manifest, mode) {
   // derived manifest for a labeled benchmark run; the underlying fixture must match --mode
   return { ...manifest, engagement: `${manifest.engagement}-bench-${mode}`, authorization: { ...manifest.authorization } };
 }
+
+// OMP workers receive HH_MANIFEST paths; a derived engagement only works when
+// its manifest file exists (and relative references still resolve), so we
+// materialize it beside the original manifest.
+function materializeBenchManifest(manifestPath, manifest, mode) {
+  const derivedPath = path.join(path.dirname(path.resolve(manifestPath)), `${path.basename(manifestPath, ".json")}-bench-${mode}.json`);
+  fs.writeFileSync(derivedPath, JSON.stringify(manifest, null, 2));
+  return derivedPath;
+}
 function cleanArgs(args) { const data=option(args,"--data",false); return {data,args:args.filter((x,i)=>x!=="--data"&&args[i-1]!=="--data")}; }
 
 async function main() {
@@ -28,7 +38,7 @@ async function main() {
     else if(command==="hypothesis") console.log(json({id:store.hypothesis(manifest.engagement,option(args,"--claim"),option(args,"--control"),option(args,"--check")),state:"proposed"}));
     else if(command==="hypotheses") console.log(json(store.list("hypothesis",manifest.engagement)));
     else if(command==="findings") console.log(json(store.list("finding",manifest.engagement).map(row=>({id:row.id,title:row.title,state:row.state,impact:row.impact,created_at:row.created_at,updated_at:row.updated_at}))));
-    else if(command==="bench") console.log(json(await benchmark(store,benchManifest(manifest,option(args,"--mode")),{path:option(args,"--path",false)||"/api/objects/a1",ownerIdentity:option(args,"--owner",false)||manifest.identities[0]?.id,otherIdentity:option(args,"--other",false)||manifest.identities[1]?.id,trials:Number(option(args,"--trials",false)||1),manifestPath:path.resolve(manifestPath),workers:args.includes("--workers")})));
+    else if(command==="bench") { const derivedManifest=benchManifest(manifest,option(args,"--mode")); const benchPath=args.includes("--workers")?materializeBenchManifest(manifestPath,derivedManifest,option(args,"--mode")):manifestPath; console.log(json(await benchmark(store,derivedManifest,{path:option(args,"--path",false)||"/api/objects/a1",ownerIdentity:option(args,"--owner",false)||manifest.identities[0]?.id,otherIdentity:option(args,"--other",false)||manifest.identities[1]?.id,trials:Number(option(args,"--trials",false)||1),manifestPath:benchPath,workers:args.includes("--workers")}))); }
     else if(command==="request") console.log(json(await rawRequest(store,manifest,{identityId:option(args,"--identity"),path:option(args,"--path"),method:option(args,"--method",false)||"GET",purpose:option(args,"--purpose",false)||"manual scoped request",body:option(args,"--body",false)})));
     else if(command==="tasks") console.log(json(store.list("task",manifest.engagement).map(row=>({id:row.id,role:row.role,state:row.state,attempt:row.attempt,action_key:row.action_key,deadline_at:row.deadline_at,created_at:row.created_at,completed_at:row.completed_at}))));
     else if(command==="map") console.log(json(await mapEngagement(store,manifest,{identityId:option(args,"--identity",false)})));
