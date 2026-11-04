@@ -143,3 +143,23 @@ test("derived benchmark manifest is refreshed materialized beside the original",
   const events=store.list("event","bm-test").map(row=>row.type);
   assert.ok(events.includes("engagement.manifest_refreshed"));
 });
+
+test("bench worker cost accounting works without a configured cap",async t=>{
+  process.env.HH_FAKE_MODE="nousage";
+  const manifestPath=path.resolve("examples/local-fixture.json");
+  const manifest=loadManifest(manifestPath).manifest; manifest.engagement="nocap-bench";
+  delete manifest.limits.max_cost_usd; delete manifest.limits.cost_reserve_usd;
+  manifest.limits={...manifest.limits, requests_per_second:100, wall_clock_minutes:0.01, max_response_bytes:1000};
+  manifest.workers={binary:"node",args:[path.resolve("tests/fake-omp.js")]};
+  const child=spawn(process.execPath,["tests/fixture/server.js","vulnerable"],{env:{...process.env,HH_FIXTURE_PORT:"44213"},stdio:["ignore","pipe","inherit"]});
+  t.after(()=>child.kill("SIGTERM"));
+  await Promise.race([once(child.stdout,"data"),once(child,"exit").then(([code])=>{throw new Error(`Fixture died ${code}`);})]);
+  manifest.targets[0].origin="http://127.0.0.1:44213"; manifest.targets[0].allow_private=true;
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-nocap-"))); t.after(()=>store.close());
+  store.createEngagement(manifestPath,manifest);
+  const summary=await benchmark(store,manifest,{path:"/api/objects/a1",ownerIdentity:"tenant-a-user",otherIdentity:"tenant-b-user",trials:2,workers:true});
+  assert.equal(summary.mode,"worker");
+  assert.equal(summary.worker_cost_used,0,"no provider cost was reported");
+  assert.ok(summary.worker_unreported_runs>=1,"deadline-aborted runs count as unreported without a cap");
+  assert.equal(summary.incomplete,2);
+});

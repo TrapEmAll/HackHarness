@@ -73,28 +73,41 @@ export class Store {
       const allocation = Math.min(remaining, Number.isFinite(desired) ? desired : remaining);
       this.db.prepare("UPDATE engagement SET reserved=? WHERE id=?").run((row.reserved || 0) + allocation, engagement);
       if (taskId) this.db.prepare("UPDATE task SET cost_reserved=? WHERE id=?").run(allocation, taskId);
+      this.db.exec("COMMIT");
       return allocation;
-    } finally { this.db.exec("COMMIT"); }
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    }
   }
   settleTaskCost(taskId, cost, { released = false } = {}) {
-    const known = this.db.prepare("SELECT engagement_id FROM task WHERE id=?").get(taskId);
+    const known = this.db.prepare("SELECT engagement_id, id, cost_reserved FROM task WHERE id=?").get(taskId);
+    let unreported = null;
     if (!known) return;
     this.db.exec("BEGIN IMMEDIATE");
+    let active = true;
     try {
       // reservation read inside the transaction: two connections can never
       // both observe the same positive balance and charge it twice
       const row = this.db.prepare("SELECT cost_reserved FROM task WHERE id=?").get(taskId);
-      if (!row || !(row.cost_reserved > 0)) return;
+      if (!row || !(row.cost_reserved > 0)) { this.db.exec("ROLLBACK"); return; }
       const reserved = row.cost_reserved;
       if (released) {
         this.db.prepare("UPDATE engagement SET reserved=MAX(reserved-?,0) WHERE id=?").run(reserved, known.engagement_id);
       } else {
         const reported = Number.isFinite(cost);
         this.db.prepare("UPDATE engagement SET reserved=MAX(reserved-?,0), cost_used=cost_used+?, cost_unknown=cost_unknown+? WHERE id=?").run(reserved, reported ? cost : reserved, reported ? 0 : 1, known.engagement_id);
+        if (!reported) unreported = { taskId, reserved };
       }
       this.db.prepare("UPDATE task SET cost_reserved=0 WHERE id=?").run(taskId);
-    } finally { this.db.exec("COMMIT"); }
+      this.db.exec("COMMIT"); active = false;
+    } catch (error) {
+      try { this.db.exec("ROLLBACK"); } catch {}
+      throw error;
+    } finally { if (active) { try { this.db.exec("COMMIT"); } catch {} } }
+    if (unreported) this.event(known.engagement_id, "worker.unreported", unreported.taskId, { reason: "provider usage not reported", reserved: unreported.reserved });
   }
+  maxEventSeq(engagement) { return this.db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM event WHERE engagement_id=?").get(engagement).seq; }
   // Leases are invalidated only after their heartbeat (or creation) goes stale:
   // a live worker process must not be orphaned by another process's reopen.
   heartbeat(taskId) { this.db.prepare("UPDATE task SET heartbeat_at=? WHERE id=?").run(now(),taskId); }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Minimal OMP RPC wire fake for HackHarness contract tests.
 // HH_FAKE_MODE: ok (normal run) | stuck (never finishes until aborted)
-const mode = process.env.HH_FAKE_MODE || "ok"; // ok | stuck | dud | failfirst
+const mode = process.env.HH_FAKE_MODE || "ok"; // ok | stuck | dud | failfirst | nousage
 const out = (frame) => { try { process.stdout.write(JSON.stringify(frame) + "\n"); } catch {} };
 out({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1048576, maxReassembledFrameBytes: 67108864 });
 let streaming = null;
@@ -38,6 +38,7 @@ process.stdin.on("data", chunk => {
       out({ id: frame.id, type: "response", command: "abort", success: true });
       out({ type: "agent_end", messages: [], isTerminal: true });
     } else if (frame.type === "get_session_stats") {
+      if (mode === "nousage") { out({ id: frame.id, type: "response", command: "get_session_stats", success: true, data: {} }); return; }
       out({ id: frame.id, type: "response", command: "get_session_stats", success: true, data: { cost: 0.01, tokens: { total: 42 } } });
     }
   }
