@@ -88,3 +88,12 @@ test("cookie boundaries: RFC path match, Secure scheme gating, host-only slice",
   insecureJar.absorb("shop.lab.example.test",{"set-cookie":['plain=1; Path=/']});
   assert.equal(insecureJar.headerFor("shop.lab.example.test","/","http"),'plain=1');
 });
+
+test("default-path inherits the request URI directory, never sibling leaf paths",t=>{
+  const jar=new CookieJar();
+  jar.absorb("shop.lab.example.test",{"set-cookie":['implicit=1','badpath=1; Path=account','explicit=1; Path=/account/login']},{scheme:"http",requestPath:"/account/login"});
+  assert.equal(jar.headerFor("shop.lab.example.test","/account","http"),"implicit=1; badpath=1","implicit default-path is /account; invalid Path=account falls back to it");
+  assert.equal(jar.headerFor("shop.lab.example.test","/public","http"),null,"implicit cookie must not reach sibling leaf paths");
+  
+  assert.match(jar.headerFor("shop.lab.example.test","/account/login","http"),/explicit=1/);
+});

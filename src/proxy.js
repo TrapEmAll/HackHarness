@@ -21,7 +21,7 @@ export class CookieJar {
     if (!relevant.length) return null;
     return relevant.map(entry=>entry.value).join("; ");
   }
-  absorb(domain, headers, scheme="http") {
+  absorb(domain, headers, { scheme = "http", requestPath = "/" } = {}) {
     const raw = headers["set-cookie"];
     const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
     for (const item of list) {
@@ -33,19 +33,27 @@ export class CookieJar {
       const valueEnd = valuePart.indexOf(";");
       const pairValue = valueEnd >= 0 ? valuePart.slice(0, valueEnd) : valuePart;
       if (!name || !pairValue) continue;
-      let pathKey = "/", secure = false, widened = false;
+      let pathKey = defaultPath(requestPath), secure = false, widened = false;
       for (const attr of valuePart.slice(valueEnd < 0 ? valuePart.length : valueEnd + 1).split(";").filter(a=>a.trim())) {
         const eq = attr.indexOf("=");
         const attrName = (eq < 0 ? attr : attr.slice(0, eq)).trim().toLowerCase();
         const attrValue = eq < 0 ? "" : attr.slice(eq + 1).trim();
         if (attrName === "domain" && attrValue) widened = true;
-        if (attrName === "path" && attrValue) pathKey = attrValue;
+        if (attrName === "path" && attrValue && attrValue.startsWith("/")) pathKey = attrValue; // non-slash paths are ignored (RFC 6265 §5.2.4)
         if (attrName === "secure") secure = true;
       }
       if (widened) continue; // Domain-widened cookies are not stored in this slice
       this.entries.set(`${domain}|${pathKey}|${name}`, { value: `${name}=${pairValue}`, domain, path: pathKey, secure });
     }
   }
+}
+
+// RFC 6265 §5.1.4 default-path: the request URI's directory segments without the last one
+function defaultPath(requestPath) {
+  if (!requestPath || !requestPath.startsWith("/")) return "/";
+  const last = requestPath.lastIndexOf("/");
+  if (last <= 0) return "/";
+  return requestPath.slice(0, last);
 }
 
 // RFC 6265 path-match: equality or a boundary at a slash
@@ -92,7 +100,7 @@ export function startProxy(store, manifest, { port, identityId } = {}) {
           method, addresses: resolved, maxBytes: manifest.limits.max_response_bytes, body,
           headers: { "user-agent":"HackHarness/0.1 proxy", ...(cookies ? { cookie: cookies } : {}) },
         });
-        jar.absorb(requestUrl.hostname, upstream.headers, requestUrl.protocol.replace(':',''));
+        jar.absorb(requestUrl.hostname, upstream.headers, { scheme: requestUrl.protocol.replace(':',''), requestPath: requestUrl.pathname });;
         const jarValues = [...jar.entries.values()].map(entry=>entry.value.split("=")[1]).filter(Boolean);
         const rawBody = upstream.body.toString("utf8");
         const evidence = json({
