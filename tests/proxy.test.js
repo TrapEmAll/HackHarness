@@ -68,10 +68,23 @@ test("scoped egress proxy enforces policy and isolates cookies per identity",asy
   assert.equal(leased.state,"completed");
 });
 
-test("cookie parsing keeps only name=value and host-only jars stay host-only",t=>{
+test("domain-widened cookies are dropped entirely and host-only jars stay host-only",t=>{
   const jar=new CookieJar();
   jar.absorb("shop.lab.example.test",{"set-cookie":['hh_member=xyz; Path=/account; Domain=.lab.example.test; HttpOnly','host_only=1; Path=/','cond=left; Path=/; Domain=evil.example.test']});
-  assert.equal(jar.headerFor("shop.lab.example.test","/account"),'hh_member=xyz; host_only=1; cond=left');
-  assert.equal(jar.headerFor("other.lab.example.test","/account"),'hh_member=xyz',"domain-wide cookie widened only to its own parent");
+  assert.equal(jar.headerFor("shop.lab.example.test","/account"),"host_only=1");
+  assert.equal(jar.headerFor("other.lab.example.test","/account"),null,"no widening at all in this slice");
   assert.equal(jar.headerFor("evil.example.test","/"),null,"a rejected Domain attribute leaves no cookie on other hosts");
+});
+
+test("cookie boundaries: RFC path match, Secure scheme gating, host-only slice",t=>{
+  const jar=new CookieJar();
+  jar.absorb("shop.lab.example.test",{"set-cookie":['acct=1; Path=/account', 'gate=1; Path=/; Secure', 'domainish=1; Path=/; Domain=.lab.example.test']}, "https");
+  assert.equal(jar.headerFor("shop.lab.example.test","/account","https"),'acct=1; gate=1');
+  assert.equal(jar.headerFor("shop.lab.example.test","/accounting","https"),'gate=1',"Path=/account must not match /accounting");
+  assert.equal(jar.headerFor("shop.lab.example.test","/account/sub","https"),'acct=1; gate=1');
+  assert.equal(jar.headerFor("shop.lab.example.test","/account","http"),'acct=1',"Secure cookies never replay over http");
+  assert.equal(jar.headerFor("shop.lab.example.test","/","https"),"gate=1","domain-widened cookie dropped; host path=/ Secure cookie remains");
+  const insecureJar=new CookieJar();
+  insecureJar.absorb("shop.lab.example.test",{"set-cookie":['plain=1; Path=/']});
+  assert.equal(insecureJar.headerFor("shop.lab.example.test","/","http"),'plain=1');
 });

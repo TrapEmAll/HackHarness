@@ -8,8 +8,20 @@ import { redactHeaders, redactText, json, now } from "./util.js";
 // (domain, path). This is deliberately smaller than a real browser cookie
 // store and never crosses identities.
 export class CookieJar {
-  constructor() { this.entries = new Map(); } // "domain|path|name" -> {value, domain, path, hostOnly}
-  absorb(domain, headers) {
+  constructor() { this.entries = new Map(); } // "domain|path|name" -> {value, domain, path, secure}
+  // First-slice restriction: only host-only cookies are stored. Cookies with a
+  // Domain attribute are dropped entirely — without a public-suffix list,
+  // domain-widening cannot be proven safe, and sibling hosts on unusual TLDs
+  // would share jars. Secure cookies are only replayed over https.
+  headerFor(domain, path, scheme="http") {
+    const relevant = [...this.entries.values()].filter(entry =>
+      (domain === entry.domain) &&
+      (entry.secure ? scheme === "https" : true) &&
+      pathMatches(path, entry.path));
+    if (!relevant.length) return null;
+    return relevant.map(entry=>entry.value).join("; ");
+  }
+  absorb(domain, headers, scheme="http") {
     const raw = headers["set-cookie"];
     const list = Array.isArray(raw) ? raw : (raw ? [raw] : []);
     for (const item of list) {
@@ -21,28 +33,25 @@ export class CookieJar {
       const valueEnd = valuePart.indexOf(";");
       const pairValue = valueEnd >= 0 ? valuePart.slice(0, valueEnd) : valuePart;
       if (!name || !pairValue) continue;
-      let domainKey = domain, pathKey = "/", hostOnly = true;
+      let pathKey = "/", secure = false, widened = false;
       for (const attr of valuePart.slice(valueEnd < 0 ? valuePart.length : valueEnd + 1).split(";").filter(a=>a.trim())) {
         const eq = attr.indexOf("=");
         const attrName = (eq < 0 ? attr : attr.slice(0, eq)).trim().toLowerCase();
         const attrValue = eq < 0 ? "" : attr.slice(eq + 1).trim();
-        if (attrName === "domain" && attrValue) {
-          const candidate = attrValue.replace(/^\./, "").toLowerCase();
-          // a Domain attribute may only widen to that same host or its parent
-          if (domain === candidate || domain.endsWith("."+candidate)) { domainKey = candidate; hostOnly = false; }
-        }
+        if (attrName === "domain" && attrValue) widened = true;
         if (attrName === "path" && attrValue) pathKey = attrValue;
+        if (attrName === "secure") secure = true;
       }
-      this.entries.set(`${domainKey}|${pathKey}|${name}`, { value: `${name}=${pairValue}`, domain: domainKey, path: pathKey, hostOnly });
+      if (widened) continue; // Domain-widened cookies are not stored in this slice
+      this.entries.set(`${domain}|${pathKey}|${name}`, { value: `${name}=${pairValue}`, domain, path: pathKey, secure });
     }
   }
-  headerFor(domain, path) {
-    const relevant = [...this.entries.values()].filter(entry =>
-      (domain === entry.domain || (!entry.hostOnly && domain.endsWith("."+entry.domain))) &&
-      (path === entry.path || path.startsWith(entry.path)));
-    if (!relevant.length) return null;
-    return relevant.map(entry=>entry.value).join("; ");
-  }
+}
+
+// RFC 6265 path-match: equality or a boundary at a slash
+function pathMatches(requestPath, cookiePath) {
+  if (requestPath === cookiePath) return true;
+  return requestPath.startsWith(cookiePath) && (cookiePath.endsWith("/") || requestPath[cookiePath.length] === "/");
 }
 
 const reject = (response, code, message) => { response.writeHead(code, { "content-type": "application/json" }); response.end(json({ error: "POLICY", message })); };
@@ -78,12 +87,12 @@ export function startProxy(store, manifest, { port, identityId } = {}) {
       request.on("end", async () => { try {
         if (["GET","HEAD","OPTIONS"].includes(method) && chunks.length) throw Object.assign(new Error("Read methods carry no body"), { code: "SCOPE" });
         const body = ["GET","HEAD","OPTIONS"].includes(method) ? null : Buffer.concat(chunks);
-        const cookies = jar.headerFor(requestUrl.hostname, requestUrl.pathname);
+        const cookies = jar.headerFor(requestUrl.hostname, requestUrl.pathname, requestUrl.protocol.replace(':',''));
         const upstream = await pinnedRequest(match.url, {
           method, addresses: resolved, maxBytes: manifest.limits.max_response_bytes, body,
           headers: { "user-agent":"HackHarness/0.1 proxy", ...(cookies ? { cookie: cookies } : {}) },
         });
-        jar.absorb(requestUrl.hostname, upstream.headers);
+        jar.absorb(requestUrl.hostname, upstream.headers, requestUrl.protocol.replace(':',''));
         const jarValues = [...jar.entries.values()].map(entry=>entry.value.split("=")[1]).filter(Boolean);
         const rawBody = upstream.body.toString("utf8");
         const evidence = json({
