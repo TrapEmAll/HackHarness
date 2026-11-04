@@ -5,15 +5,18 @@ const identities={"Bearer fixture-token-a":{id:"user-a",tenant:"a"},"Bearer fixt
 const objects={a1:{id:"a1",owner:"user-a",tenant:"a",email:"alice@example.test",secret:"alpha-fixture-secret"},b1:{id:"b1",owner:"user-b",tenant:"b",email:"bob@example.test",secret:"beta-fixture-secret"}};
 const server=http.createServer((request,response)=>{
   response.setHeader("content-type","application/json");
+  const requestUrl=new URL(request.url,"http://127.0.0.1");
+  const delay=Number(requestUrl.searchParams.get("delay"))||0;
+  const finish=(code,body)=>setTimeout(()=>{response.statusCode=code;response.end(body);},delay);
   if(request.url==="/health"){response.end(JSON.stringify({ok:true,mode}));return;}
   const identity=identities[request.headers.authorization];
-  if(!identity){response.statusCode=401;response.end(JSON.stringify({error:"unauthorized"}));return;}
-  if(request.url==="/api/"){response.end(JSON.stringify({objects:["/api/objects/a1","/api/objects/b1"]}));return;}
-  const match=/^\/api\/objects\/([ab]1)$/.exec(request.url||"");
-  if(!match){response.statusCode=404;response.end(JSON.stringify({error:"not found"}));return;}
+  if(!identity){finish(401,JSON.stringify({error:"unauthorized"}));return;}
+  if(requestUrl.pathname==="/api/"){finish(200,JSON.stringify({objects:["/api/objects/a1","/api/objects/b1"]}));return;}
+  const match=/^\/api\/objects\/([ab]1)$/.exec(requestUrl.pathname||"");
+  if(!match){finish(404,JSON.stringify({error:"not found"}));return;}
   const object=objects[match[1]];
-  if(mode==="fixed"&&object.owner!==identity.id){response.statusCode=403;response.end(JSON.stringify({error:"forbidden"}));return;}
-  response.end(JSON.stringify(object));
+  if(mode==="fixed"&&object.owner!==identity.id){finish(403,JSON.stringify({error:"forbidden"}));return;}
+  finish(200,JSON.stringify(object));
 });
 server.listen(port,"127.0.0.1",()=>console.log(JSON.stringify({ready:true,mode,port})));
 for(const signal of ["SIGTERM","SIGINT"])process.on(signal,()=>server.close(()=>process.exit(0)));

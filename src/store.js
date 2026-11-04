@@ -126,6 +126,18 @@ export class Store {
     const result=this.db.prepare("UPDATE task SET state=?,completed_at=? WHERE id=? AND state='running'").run(state,now(),value);
     return result.changes>0;
   }
+  // Atomically claims a finishing lease. Callers must gate every result write
+  // (hypothesis flips, findings, verification states) on a true result: a lease
+  // revoked mid-flight cannot publish outcomes after the fact.
+  claimCompletion(taskId, finalState="completed") {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row=this.db.prepare("SELECT state FROM task WHERE id=?").get(taskId);
+      if (!row || row.state!=="running") return false;
+      this.db.prepare("UPDATE task SET state=?,completed_at=? WHERE id=?").run(finalState,now(),taskId);
+      return true;
+    } finally { this.db.exec("COMMIT"); }
+  }
   evidence(engagement, task, kind, content, metadata) {
     const value=id("E"), digest=sha256(content), relative=`artifacts/${value}.json`;
     atomicWrite(path.join(this.root,relative),content);

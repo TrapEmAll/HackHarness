@@ -52,12 +52,21 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
     const owner=await gateway.request({taskId,identityId:ownerIdentity,url,purpose:"owner baseline"});
     const other=await gateway.request({taskId,identityId:otherIdentity,url,purpose:"negative authorization control"});
     const result=compareOwnership(owner,other,ownerIdentity);
-    store.finishTask(taskId,"completed"); store.setHypothesis(hypothesisId,result.supported?"supported":"rejected");
+    const committed=store.claimCompletion(taskId,"completed");
+    if (!committed) {
+      store.event(manifest.engagement,"task.fenced",taskId,{outcome:result.reason,lease:"revoked before result commit"});
+      return {taskId,state:"fenced",reason:"lease was revoked before this result could be committed",evidence:[owner.evidenceId,other.evidenceId]};
+    }
+    store.setHypothesis(hypothesisId,result.supported?"supported":"rejected");
     if (!result.supported) return {taskId,state:"rejected",reason:result.reason,evidence:[owner.evidenceId,other.evidenceId]};
     const replay={type:"authorization_read",path:resourcePath,owner_identity:ownerIdentity,other_identity:otherIdentity,expected_owner:result.ownerMarker,protected_fields:result.exposed};
     const findingId=store.finding(manifest.engagement,hypothesisId,"Cross-identity object read",[owner.evidenceId,other.evidenceId],replay,result.reason,"reproduced");
     return {taskId,findingId,state:"reproduced",reason:result.reason,evidence:[owner.evidenceId,other.evidenceId]};
-  } catch(error) { store.finishTask(taskId,"failed"); store.setHypothesis(hypothesisId,"inconclusive"); throw error; }
+  } catch(error) {
+    const claimed=store.finishTask(taskId,"failed");
+    if (claimed) store.setHypothesis(hypothesisId,"inconclusive");
+    throw error;
+  }
 }
 
 // Reviewer playbook: scope, impact, duplication, report-quality assessment on
@@ -180,7 +189,12 @@ export async function replayFinding(store,manifest,findingId) {
     const other=await gateway.request({taskId,identityId:finding.replay.other_identity,url,purpose:"independent negative control replay"});
     const result=compareOwnership(owner,other,finding.replay.owner_identity);
     const exact=result.supported && result.ownerMarker===finding.replay.expected_owner && finding.replay.protected_fields.every(key=>result.exposed.includes(key));
-    store.finishTask(taskId,"completed"); store.setFinding(findingId,exact?"independently_verified":"stale");
+    const committed=store.claimCompletion(taskId,"completed");
+    if (!committed) {
+      store.event(manifest.engagement,"task.fenced",taskId,{outcome:exact?"exact":"mismatch",lease:"revoked before result commit"});
+      return {taskId,findingId,state:"fenced",reason:"lease was revoked before this verification could be committed",evidence:[owner.evidenceId,other.evidenceId]};
+    }
+    store.setFinding(findingId,exact?"independently_verified":"stale");
     return {taskId,findingId,state:exact?"independently_verified":"stale",reason:result.reason,evidence:[owner.evidenceId,other.evidenceId]};
   } catch(error) { store.finishTask(taskId,"failed"); throw error; }
 }
