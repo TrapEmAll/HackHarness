@@ -38,8 +38,15 @@ export function loadManifest(file) {
     if (!Number.isFinite(limit) || limit <= 0) fail(`limits.${key} must be a positive number`, "MANIFEST");
   }
   if (value.limits.max_cost_usd !== undefined && !(Number.isFinite(value.limits.max_cost_usd) && value.limits.max_cost_usd > 0)) fail("limits.max_cost_usd must be a positive number", "MANIFEST");
+  if (value.limits.cost_reserve_usd !== undefined && !(Number.isFinite(value.limits.cost_reserve_usd) && value.limits.cost_reserve_usd > 0)) fail("limits.cost_reserve_usd must be a positive number", "MANIFEST");
   value.workers = { binary: process.env.HH_OMP || "omp", ...(value.workers || {}) };
   if (typeof value.workers.binary !== "string" || !value.workers.binary) fail("workers.binary must be a nonempty string", "MANIFEST");
+  value.sources = (value.sources || []).map((source, index) => {
+    if (!source.id || typeof source.id !== "string" || !/^[a-zA-Z0-9._-]{1,64}$/.test(source.id)) fail(`sources[${index}].id must be a short identifier`, "MANIFEST");
+    const rootAbsolute = path.resolve(path.dirname(absolute), source.root || "");
+    if (!fs.existsSync(rootAbsolute) || !fs.statSync(rootAbsolute).isDirectory()) fail(`sources[${source.id}].root does not point at a directory: ${rootAbsolute}`, "MANIFEST");
+    return { id: source.id, root: source.root, root_absolute: rootAbsolute };
+  });
   if (value.workers.args !== undefined && !(Array.isArray(value.workers.args) && value.workers.args.every(entry => typeof entry === "string"))) fail("workers.args must be an array of strings", "MANIFEST");
   for (const [role, alias] of Object.entries(value.workers.routing || {})) {
     if (typeof alias !== "string" || !alias) fail(`workers.routing.${role} must be a nonempty model alias`, "MANIFEST");

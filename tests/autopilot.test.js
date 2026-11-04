@@ -44,7 +44,8 @@ test("killing a delegate mid-run yields an interrupted lease that re-dispatches 
   const hypothesis=store.hypothesis(manifest.engagement,"Tenant B can read","denied","compare");
   // the child loads a manifest file, not the mutated in-memory object: write it
   const childManifestPath=path.join(root,"manifest.json");
-  fs.writeFileSync(childManifestPath,JSON.stringify(manifest));
+  // sources roots resolve relative to the manifest file's directory; clear them for the relocated copy
+  fs.writeFileSync(childManifestPath,JSON.stringify({ ...manifest, sources: [] }));
   fs.copyFileSync(path.resolve("examples/authorization.md"),path.join(root,"authorization.md"));
   const child=spawn(process.execPath,["src/cli.js","delegate",childManifestPath,hypothesis,"--path","/api/objects/a1","--owner","tenant-a-user","--other","tenant-b-user"],{cwd:process.cwd(),env:{...process.env,HH_FAKE_MODE:"stuck",HH_DATA_DIR:root},stdio:["ignore","ignore","pipe"]});
   let stderr=""; child.stderr.on("data",chunk=>stderr+=chunk);

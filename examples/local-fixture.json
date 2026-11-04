@@ -13,6 +13,7 @@
     "request_limit": 100,
     "allow_private": true
   }],
+  "sources": [{ "id": "fixture-src", "root": "../tests/fixture/source" }],
   "identities": [
     {"id": "tenant-a-user", "secret_ref": "env://HH_TOKEN_A", "tenant": "a", "role": "user"},
     {"id": "tenant-b-user", "secret_ref": "env://HH_TOKEN_B", "tenant": "b", "role": "user"}

@@ -66,6 +66,8 @@ Inside OMP, use `/hh context`, `/hh hypotheses`, `/hh findings`, `/hh pause`, `/
 
 `limits.concurrency` (default 2) caps simultaneously `running` tasks per engagement across all roles; further dispatches fail with `CONCURRENCY` until a task completes or is recovered. Each delegate counts its worker lease and the inner investigation as two of those slots while in flight.
 
+`hh assess MANIFEST FINDING [--model ALIAS]` delegates the reviewer role — scope, impact, duplication, and report-quality assessment — to a read-only OMP worker under a `worker-review:<finding>` lease. The brief restricts it to `hh_evidence_read` and `hh_findings` (no target-facing tools); the turn is only successful if it ends with a parseable JSON verdict naming the finding, which lands as a `reviewer.assessment` event. The reviewer never mutates finding state: export still requires your explicit `hh review ... approve`. Routing prefers `workers.routing.reviewer`, then verifier, then investigator.
+
 Manifest additions:
 
 ```json
@@ -78,9 +80,28 @@ Manifest additions:
 }
 ```
 
-`workers.binary` defaults to `omp` on PATH (override with the `HH_OMP` env var). Routing aliases are OMP fuzzy model patterns, not hard-coded vendor names. Set the model with `--model` per dispatch, `workers.routing.investigator` by default, or neither for the session default model. `limits.max_cost_usd` is passed to the worker as omp's `--max-cost` cap; when a session cannot report usage, no cost is recorded rather than a guessed one.
+`workers.binary` defaults to `omp` on PATH (override with the `HH_OMP` env var). Routing aliases are OMP fuzzy model patterns, not hard-coded vendor names. Set the model with `--model` per dispatch, `workers.routing.investigator` by default, or neither for the session default model. `limits.max_cost_usd` is enforced engagement-wide: every worker dispatch **reserves** a slice of the remaining budget atomically (reserving `limits.cost_reserve_usd` when set, otherwise pacing to the remainder) before its process spawns, and that reservation is passed to the worker as omp's `--max-cost`. When the run ends, reported usage replaces the reservation; usage the provider fails to report keeps the reservation and increments `cost_unknown`, and crash recovery charges any still-open reservation as unknown spend — unreported runs can never run without bound. `hh context` reports `cost.used`, `cost.unreported_runs`, and `cost.reserved`.
 
 This is tool-surface narrowing, not an environment or OS sandbox. The worker process runs with your user, inherits the parent process environment (including the `env://` credential variables — the gateway reads them in the `hh investigate` child), and calls its configured model provider directly with your own credentials. What the boundary gives you: the worker has no built-in bash/browser/file tools, no ambient project extensions, and cannot reach the target except through the scoped, budgeted gateway. What it does not give you: secret isolation, network isolation, or filesystem isolation.
+
+Role gating is enforced at extension load, not by prompt discipline: the adapter reads `HH_ROLE` before registration and only registers that role's tools. The reviewer dispatch runs with `HH_ROLE=reviewer`, so `hh_replay`, `hh_investigate_authorization`, and `hh_hypothesis_submit` never exist in that process regardless of what the prompt or target content says. Investigator workers run with the full `hh_*` set.
+
+## Map and observations
+
+`hh map MANIFEST [--identity ID]` runs the mapper playbook through the scoped gateway: it probes each declared path prefix with every declared identity, discovers JSON-shaped child paths (`/api/...` strings in responses), and records `Observation` rows — `endpoint.probe` for single-identity mappings, or `authorization.denied` (identities disagreed with a denial), `authorization.diff` (different owner markers), `cross_identity.pool` (every identity saw the same owner marker), or `uniform` per discovered path. Observations cite the evidence capture backing them; `hh observations MANIFEST` lists them. Mapping is read-only, budgeted, and deductible to the same per-target request limits as investigations.
+
+`hh sources MANIFEST` lists manifest-declared read-only target source roots, and `hh source-read MANIFEST --source ID --file RELATIVE` reads a file inside one of them — traversal- and symlink-guarded to the declared root, capped at 256 KiB per file, and identity-redacted before it is persisted as evidence with a `source.read` observation. The adapter's `hh_source_read` tool exposes the same guard to OMP workers (available to the `all` role plus `mapper` and `reviewer` gating). Sources help planning: read the target's authorization logic before proposing hypotheses. Source roots resolve relative to the manifest file's own directory; copies of a manifest placed elsewhere still point into the original tree unless edited. — planning is your job: submit hypotheses with `hh hypothesis` or the `hh_hypothesis_submit` tool using the observations as justification.
+
+## Benchmark
+
+`hh bench MANIFEST --mode vulnerable|fixed [--trials N]` measures the deterministic authorization playbook against a labeled fixture (start the matching fixture server first; the metrics are for the machinery, not the model planner — planner-quality benchmarks need `hh delegate` and cost money, so they are not run automatically). Output per run:
+
+- `denominator` / `trials` / `incomplete`: what was attempted and what failed (rows keep per-trial outcomes with denominated failures, never dropped).
+- `reproduced` and `independently_verified`: supported claims and their independent replay rate (`replay_success_rate`); on the labeled `vulnerable` fixture both should equal `trials`; on `fixed`, both are expected to be 0 — a supported claim there is a false positive you must investigate.
+- `requests_total` / `requests_per_trial`: each trial's probes (investigation + independent replay) counted through the same budget as real work.
+- `elapsed_ms`, `scope_violations` (any `SCOPE` error code), and `fixture_is_read_only` (manifest honesty check that only read methods were declared).
+
+The summary is also logged as a `benchmark.completed` event with its hypothesis reference.
 
 ## Manifest and policy
 
@@ -100,8 +121,8 @@ The suite checks scope escapes, per-target request budgets, task leases with ded
 
 ## Status against DESIGN.md
 
-Implemented from the release sequence: milestone 1 (one complete local workflow) and milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, and a wave-scheduled autopilot — with model routing and cost caps). Not yet implemented: centralized cross-worker budget reservation for provider usage reporting gaps, browser work, and benchmarks.
+Implemented from the release sequence: milestone 1 (one complete local workflow), milestone 2 (per-target budgets, task leases with attempt IDs and wall-clock deadlines, action deduplication, restart recovery including mid-run worker kills, engagement concurrency caps, and bounded OMP worker dispatch — investigation, independent verification, wave-scheduled autopilot, and the read-only reviewer — with model routing and cost caps), and the read-only mapper playbook with observation records. Not yet implemented: browser work, source-assisted investigations beyond the read pathway, and model-driven benchmark reporting (the deterministic fixture benchmark harness ships as `hh bench`; planner-quality measurements must be driven manually through `hh delegate`).
 
 ## Current boundary
 
-HackHarness currently supports read-only HTTP authorization comparisons, including OMP-worker delegation of both investigation and independent verification. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
+HackHarness currently supports read-only HTTP authorization comparisons (direct or OMP-worker delegated), independent verification, wave-scheduled autopilot, the read-only mapper playbook, reviewer-role assessments, and the deterministic fixture benchmark harness. Browser automation, state-changing playbooks, encrypted raw capture retention, and external report submission are intentionally unavailable. The broader architecture and release sequence are documented in [DESIGN.md](DESIGN.md); those items should not be treated as implemented security guarantees.
