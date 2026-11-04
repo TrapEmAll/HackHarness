@@ -257,22 +257,36 @@ export async function mapEngagement(store, manifest, { identityId, model } = {})
 // Deterministic benchmark of the authorization playbook against a labeled
 // fixture. It does NOT exercise the model planner; it measures the machinery:
 // supported findings, independent replay success, requests, time, scope burns.
-export async function benchmark(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, trials = 1, manifestPath } = {}) {
+export async function benchmark(store, manifest, { path: resourcePath, ownerIdentity, otherIdentity, trials = 1, manifestPath, workers = false } = {}) {
   if (!resourcePath || !ownerIdentity || !otherIdentity) throw Object.assign(new Error("benchmark requires --path --owner --other"), { code: "INVALID" });
   const rounds = Math.max(1, Math.round(trials));
   const engagement = manifest.engagement;
   if (!store.engagement(engagement)) store.createEngagement(manifestPath || `${engagement}.json`, manifest);
   const startedAt = store.requestsUsed(engagement), startedMS = Date.now();
+  const startedCost = store.engagement(engagement);
   let scopeViolations = 0, reproduced = 0, verified = 0;
   const rows = [];
-  const hypothesis = store.hypothesis(engagement, `Fixture bench: ${resourcePath}`, "fixture control denies identity", `Compare ${resourcePath} across identities`);
+  const hypothesis = workers
+    ? store.hypothesis(engagement, `Fixture bench via worker: ${resourcePath}`, "fixture control denies identity", `Compare ${resourcePath} across identities`)
+    : store.hypothesis(engagement, `Fixture bench: ${resourcePath}`, "fixture control denies identity", `Compare ${resourcePath} across identities`);
   for (let trial = 0; trial < rounds; trial++) {
     try {
-      const result = await investigateAuthorization(store, manifest, { hypothesisId: hypothesis, path: resourcePath, ownerIdentity, otherIdentity });
-      const replayState = result.findingId ? (await replayFinding(store, manifest, result.findingId)).state : null;
-      if (result.state === "reproduced") reproduced++;
-      if (replayState === "independently_verified") verified++;
-      rows.push({ trial, state: result.state, findingId: result.findingId, replayState });
+      let result, replayState = null;
+      if (workers) {
+        // planner-led trials: each investigation and independent verification runs
+        // in an OMP worker; the harness only records what came back
+        result = await delegateInvestigation(store, manifest, { hypothesisId: hypothesis, path: resourcePath, ownerIdentity, otherIdentity, model: manifest.workers.routing?.investigator });
+        const finding = result.finding;
+        if (finding) replayState = (await delegateReplay(store, manifest, { findingId: finding.id, model: manifest.workers.routing?.verifier })).replayState;
+        if (finding?.state === "reproduced") reproduced++;
+        if (replayState === "independently_verified") verified++;
+      } else {
+        result = await investigateAuthorization(store, manifest, { hypothesisId: hypothesis, path: resourcePath, ownerIdentity, otherIdentity });
+        replayState = result.findingId ? (await replayFinding(store, manifest, result.findingId)).state : null;
+        if (result.state === "reproduced") reproduced++;
+        if (replayState === "independently_verified") verified++;
+      }
+      rows.push({ trial, state: result.state, findingId: result.findingId ?? result.finding?.id ?? null, replayState });
     } catch (error) {
       if (error.code === "SCOPE") scopeViolations++;
       rows.push({ trial, error: error.code || "ERROR" });
@@ -280,6 +294,7 @@ export async function benchmark(store, manifest, { path: resourcePath, ownerIden
   }
   const requests = store.requestsUsed(engagement) - startedAt;
   const elapsed = Date.now() - startedMS;
+  const cost = store.engagement(engagement);
   const summary = {
     trials: rounds, denominator: rounds, incomplete: rows.filter(row=>row.error).length,
     reproduced, independently_verified: verified,
@@ -289,6 +304,11 @@ export async function benchmark(store, manifest, { path: resourcePath, ownerIden
     replay_success_rate: reproduced ? Number((verified / reproduced).toFixed(3)) : null,
     scope_violations: scopeViolations,
     fixture_is_read_only: manifest.targets.every(target=>target.methods.every(method=>["GET","HEAD","OPTIONS"].includes(method))),
+    ...(workers ? {
+      worker_cost_used: Number(((cost.cost_used || 0) - (startedCost.cost_used || 0)).toFixed(4)),
+      worker_unreported_runs: (cost.cost_unknown || 0) - (startedCost.cost_unknown || 0),
+      mode: "worker",
+    } : { mode: "playbook" }),
     rows,
   };
   store.event(engagement,"benchmark.completed",null,{hypothesis,...summary});

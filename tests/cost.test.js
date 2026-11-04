@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { Store } from "../src/store.js";
 import { loadManifest } from "../src/manifest.js";
-import { delegateInvestigation } from "../src/workflow.js";
+import { delegateInvestigation, benchmark } from "../src/workflow.js";
 
 process.env.HH_TOKEN_A="fixture-token-a"; process.env.HH_TOKEN_B="fixture-token-b";
 
@@ -63,6 +65,28 @@ test("reserve failure leaves the task usable and charges nothing",t=>{
   assert.throws(()=>store.reserveWorkerBudget("cap-test",0.01,0.01),{code:"BUDGET"});
   const row=store.engagement("cap-test");
   assert.ok(Math.abs(row.reserved-0.01)<1e-9);
+});
+
+test("worker-mode bench counts refusals and unreported spend in its denominators",async t=>{
+  process.env.HH_FAKE_MODE="dud";
+  const manifestPath=path.resolve("examples/local-fixture.json");
+  const manifest=loadManifest(manifestPath).manifest; manifest.engagement="wbench";
+  manifest.workers={binary:"node",args:[path.resolve("tests/fake-omp.js")]};
+  manifest.limits={requests_per_second:100,wall_clock_minutes:1,max_response_bytes:1000,max_cost_usd:0.01,cost_reserve_usd:0.005};
+  const child=spawn(process.execPath,["tests/fixture/server.js","vulnerable"],{env:{...process.env,HH_FIXTURE_PORT:"44177"},stdio:["ignore","pipe","inherit"]});
+  t.after(()=>child.kill("SIGTERM"));
+  await Promise.race([once(child.stdout,"data"),once(child,"exit").then(([code])=>{throw new Error(`Fixture died ${code}`);})]);
+  manifest.targets[0].origin="http://127.0.0.1:44177";
+  manifest.targets[0].allow_private=true;
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-wbench-"))); t.after(()=>store.close());
+  store.createEngagement(manifestPath,manifest);
+  const summary=await benchmark(store,manifest,{path:"/api/objects/a1",ownerIdentity:"tenant-a-user",otherIdentity:"tenant-b-user",trials:3,workers:true});
+  assert.equal(summary.mode,"worker");
+  assert.equal(summary.trials,3); assert.equal(summary.denominator,3);
+  assert.equal(summary.incomplete,3,"dud workers make every trial incomplete");
+  assert.equal(summary.reproduced,0); assert.equal(summary.independently_verified,0);
+  assert.ok(summary.worker_unreported_runs>=1,"at least one dispatch retained its reservation");
+  assert.ok(summary.worker_cost_used>0,"worker reservations accumulate against the cap");
 });
 
 test("refused dispatch leaves no running lease behind",async t=>{

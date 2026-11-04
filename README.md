@@ -105,6 +105,8 @@ Role gating is enforced at extension load, not by prompt discipline: the adapter
 
 The summary is also logged as a `benchmark.completed` event with its hypothesis reference.
 
+Adding `--workers` makes each trial planner-led: the investigation runs through `hh delegate` (and any finding it reproduces is verified through `hh verify`), so trials exercise the real model pipeline and cost money. The summary then reports `worker` mode with `worker_cost_used` (what workers actually reported plus reservations) and `worker_unreported_runs` (runs whose provider usage was never reported), alongside the same denominators — run it only against the fixture matching `--mode`.
+
 ## Manifest and policy
 
 Manifests are JSON. They require an authorization document with a future expiry, exact target origins, path prefixes, HTTP methods, per-target request budgets, and identities backed by `env://VARIABLE` references. Credential values are injected only in the gateway and redacted before evidence is persisted.
