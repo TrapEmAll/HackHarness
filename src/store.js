@@ -120,6 +120,10 @@ export class Store {
     return running.length;
   }
   taskState(taskId) { const row=this.db.prepare("SELECT state FROM task WHERE id=?").get(taskId); return row?.state ?? null; }
+  assertLeaseActive(taskId) {
+    const state=this.taskState(taskId);
+    if (state!=="running") throw Object.assign(new Error(`Task lease is no longer active (${state ?? "missing"}); target access is fenced`), { code:"BUDGET" });
+  }
   hypothesis(engagement, claim, control, proposedCheck) {
     const value = id("H");
     this.db.prepare("INSERT INTO hypothesis VALUES(?,?,?,?,?,?,?)").run(value,engagement,claim,control,proposedCheck,"proposed",now());

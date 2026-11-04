@@ -7,8 +7,9 @@ const server=http.createServer((request,response)=>{
   response.setHeader("content-type","application/json");
   const requestUrl=new URL(request.url,"http://127.0.0.1");
   const delay=Number(requestUrl.searchParams.get("delay"))||0;
-  const finish=(code,body)=>setTimeout(()=>{response.statusCode=code;response.end(body);},delay);
+  const finish=(code,body,headers={})=>setTimeout(()=>{ for(const [key,value] of Object.entries(headers)) response.setHeader(key,value); response.statusCode=code; response.end(body); },delay);
   if(request.url==="/health"){response.end(JSON.stringify({ok:true,mode}));return;}
+  if(requestUrl.pathname==="/api/cookies"){finish(200,JSON.stringify({cookies:request.headers.cookie||null}),{"Set-Cookie":["hh_session=abc123; Path=/; HttpOnly"]});return;}
   const identity=identities[request.headers.authorization];
   if(!identity){finish(401,JSON.stringify({error:"unauthorized"}));return;}
   if(requestUrl.pathname==="/api/"){finish(200,JSON.stringify({objects:["/api/objects/a1","/api/objects/b1"]}));return;}

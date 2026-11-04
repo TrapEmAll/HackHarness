@@ -4,7 +4,7 @@ import { json, now, redactHeaders, redactText, sha256 } from "./util.js";
 import http from "node:http";
 import https from "node:https";
 
-function pinnedRequest(url, { method, headers, body, addresses, maxBytes, timeout = 10_000 }) {
+export function pinnedRequest(url, { method, headers, body, addresses, maxBytes, timeout = 10_000 }) {
   return new Promise((resolve, reject) => {
     const transport=url.protocol==="https:"?https:http;
     const lookup=(_hostname,options,callback)=> {
