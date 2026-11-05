@@ -5,3 +5,5 @@ node_modules/
 *.sqlite-wal
 .smoke-*/
 examples/local-fixture-bench-*.json
+.dbg-*.mjs
+battery*.log
