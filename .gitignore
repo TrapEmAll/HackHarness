@@ -7,3 +7,5 @@ node_modules/
 examples/local-fixture-bench-*.json
 .dbg-*.mjs
 battery*.log
+hostile.log
+battery*.log
