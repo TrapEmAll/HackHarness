@@ -87,7 +87,7 @@ export function startProxy(store, manifest, { port, identityId } = {}) {
       try {
         match = matchTarget(manifest, requestUrl.href, method);
         resolved = await resolveTarget(match.target, match.url);
-      } catch (scopeError) { reject(response, 403, scopeError.message); return; }
+      } catch (scopeError) { store.event(manifest.engagement, "proxy.refused", lease, { url: requestUrl.href, reason: scopeError.message }); reject(response, 403, scopeError.message); return; }
       store.incrementRequests(manifest.engagement, match.target.id, match.target.request_limit);
       store.heartbeat(lease);
       const chunks = []; let size = 0;
@@ -115,6 +115,7 @@ export function startProxy(store, manifest, { port, identityId } = {}) {
         response.writeHead(upstream.status, clientHeaders);
         response.end(upstream.body);
       } catch (error) {
+        store.event(manifest.engagement, "proxy.refused", lease, { url: match.url.href, reason: error.message });
         reject(response, error.code === "SCOPE" || error.code === "BUDGET" ? 403 : 502, error.message);
       } });
     } catch (error) {

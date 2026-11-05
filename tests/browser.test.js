@@ -95,7 +95,7 @@ test("real Chromium traverses the fail-closed proxy: declared page renders, redi
     sentinelPortHolder.port=null;
     await new Promise(resolve=>sentinel.listen(0,"127.0.0.1",()=>{ sentinelPortHolder.port=sentinel.address().port; resolve(); }));
 
-    browser=spawn(browserBinary,["--headless=new","--disable-gpu","--no-first-run",`--user-data-dir=${scratch}`,`--proxy-server=http://hh-proxy-local:${effectiveProxyPort}`,`--proxy-bypass-list=<-loopback>`,`--host-resolver-rules=MAP hh-proxy-local 127.0.0.1`,`--remote-debugging-port=0`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
+    browser=spawn(browserBinary,["--headless=new","--disable-gpu","--no-first-run",`--user-data-dir=${scratch}`,`--proxy-server=http://hh-proxy-local:${effectiveProxyPort}`,`--proxy-bypass-list=<-loopback>`,`--host-resolver-rules=MAP hh-proxy-local 127.0.0.1, MAP hh-rebind-local 127.0.0.1`,`--remote-debugging-port=0`,"about:blank"],{stdio:["ignore","ignore","pipe"]});
     let debugPort=null;
     await (async()=>{ for (let at=0;at<80;at++) { try { debugPort=Number(fs.readFileSync(path.join(scratch,"DevToolsActivePort"),"utf8").split(/\r?\n/)[0]); await fetch(`http://127.0.0.1:${debugPort}/json/version`); return; } catch (error) { if (browser.exitCode!==null) throw new Error(`Browser exited early ${browser.exitCode}: ${browserError||error.message}`); await new Promise(r=>setTimeout(r,100)); } } throw new Error(`Browser debug port never answered (exit ${browser.exitCode}, stderr ${browserError||"none"})`); })();
 
@@ -150,10 +150,15 @@ test("real Chromium traverses the fail-closed proxy: declared page renders, redi
     const sameRedirect=await cdp.send("Runtime.evaluate",{expression:`fetch(${JSON.stringify(sameRedirectUrl)}).then(r=>r.url+" status:"+r.status)`,returnByValue:true,awaitPromise:true});
     assert.match(String(sameRedirect.result?.value),/\/api\/cookies status:200/,"same-origin redirect ends on the cookies page");
 
-    // rebinding-style alias: a name resolving to the target IP still has to be a declared origin
-    const rebindUrl=`http://rebinding-host.invalid:${fixturePort}/api/cookies`;
+    // rebinding-style alias: a name mapped onto the target's IP still has to be
+    // a declared origin; the proxy emits an explicit refusal event for it
+    const rebindRefusalsBefore=store.list("event","browser-test").filter(row=>row.type==="proxy.refused" && JSON.parse(row.payload_json).url?.includes("hh-rebind-local")).length;
+    const rebindUrl=`http://hh-rebind-local:${fixturePort}/api/cookies`;
     const rebind=await cdp.send("Runtime.evaluate",{expression:`fetch(${JSON.stringify(rebindUrl)}).then(r=>'rebind:'+r.status).catch(e=>'rebind-blocked')`,returnByValue:true,awaitPromise:true});
+    assert.ok(!rebind.exceptionDetails,"rebind probe must be an observable page-side value: "+JSON.stringify(rebind.exceptionDetails||""));
     assert.notEqual(rebind.result?.value,"rebind:200","rebind-styled aliases must not ride the declared origin");
+    const rebindRefusalsAfter=store.list("event","browser-test").filter(row=>row.type==="proxy.refused" && JSON.parse(row.payload_json).url?.includes("hh-rebind-local")).length;
+    assert.ok(rebindRefusalsAfter>rebindRefusalsBefore,"the proxy must explicitly refuse the rebinding-style alias");
 
     closeRequested=true;
     const evidences=store.list("evidence","browser-test");
