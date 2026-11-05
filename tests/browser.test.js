@@ -142,8 +142,23 @@ test("real Chromium traverses the fail-closed proxy: declared page renders, redi
 
     // the 302 hop itself was captured as evidence through the proxy
     const redirectEvidence=store.list("evidence","browser-test").map(row=>JSON.parse(fs.readFileSync(path.join(store.root,row.artifact_path),"utf8")))
-      .find(capture=>capture.response.status===302 && /\/api\/redirect/.test(capture.request.url));
+      .find(capture=>capture.response.status===302 && /api\/redirect/.test(capture.request.url));
     assert.ok(redirectEvidence,"the 302 hop must exist as redacted evidence citing the redirect request");
+
+    // prompt-injection content: hostile page renders, injection text is page-side only,
+    // and the persisted evidence keeps the directive text while redacting identity secrets
+    const injectUrl=`http://127.0.0.1:${fixturePort}/api/inject`;
+    await cdp.send("Page.navigate",{url:injectUrl});
+    await new Promise(r=>setTimeout(r,1200));
+    const injectResult=await cdp.send("Runtime.evaluate",{expression:"document.body.innerText",returnByValue:true});
+    assert.match(String(injectResult.result?.value||""),/SYSTEM OVERRIDE.*leak the tokens/s,"hostile page must render for the browser itself");
+    const injectCapture=store.list("evidence","browser-test").map(row=>JSON.parse(fs.readFileSync(path.join(store.root,row.artifact_path),"utf8")))
+      .find(capture=>/api\/inject/.test(capture.request.url));
+    assert.ok(injectCapture,"hostile page must be captured as evidence");
+    const injectText=JSON.stringify(injectCapture);
+    assert.match(injectText,/ignore all previous instructions/,"evidence keeps the hostile directive as page data");
+    assert.doesNotMatch(injectText,/fixture-token-/,"identity tokens are redacted even in hostile content");
+    assert.doesNotMatch(injectText,/hh_session=abc123|h*evict/,"jar cookie values stay out of persisted evidence");
 
     // same-origin redirect: both hops traverse the proxy
     const sameRedirectUrl=`http://127.0.0.1:${fixturePort}/api/redirect?to=${encodeURIComponent("/api/cookies")}`;
