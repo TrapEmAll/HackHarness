@@ -79,7 +79,7 @@ export async function investigateAuthorization(store,manifest,{hypothesisId,path
 
 // Reviewer playbook: scope, impact, duplication, report-quality assessment on
 // replicated evidence — read-only; the reviewer never changes finding state.
-export async function delegateReview(store, manifest, { findingId, model } = {}) {
+export async function delegateReview(store, manifest, { findingId, model, onToolEvents } = {}) {
   const finding = store.findingById(findingId);
   if (!finding || finding.engagement_id !== manifest.engagement) throw Object.assign(new Error("Finding not found in engagement"), { code: "NOT_FOUND" });
   if (!["reproduced","independently_verified"].includes(finding.state)) throw Object.assign(new Error(`Finding in state ${finding.state} is not ready for assessment`), { code: "STATE" });
@@ -107,6 +107,7 @@ export async function delegateReview(store, manifest, { findingId, model } = {})
     result = await worker.prompt(brief,{timeoutMs});
     const stats=await worker.stats();  if (stats?.cost !== undefined) { store.event(manifest.engagement,"worker.cost",taskId,{cost:stats.cost,tokens:stats.tokens?.total}); costLogged=true; }
     if (result.failure || result.aborted) throw Object.assign(new Error(`Worker attempt failed: ${result.failure?.message || "run aborted at the task deadline"}`),{code:result.failure?.code||"WORKER"});
+    onToolEvents?.([...worker.toolEvents]);
     const line=result.text.split(/\r?\n/).map(part=>part.trim()).filter(Boolean).pop();
     let assessment; try { assessment=JSON.parse(line); } catch { throw Object.assign(new Error("Reviewer turn completed without a parseable final JSON verdict"), { code: "WORKER" }); }
     if (assessment.findingId !== findingId || typeof assessment.scope_ok !== "boolean") throw Object.assign(new Error("Reviewer verdict did not reference the finding"), { code: "WORKER" });
