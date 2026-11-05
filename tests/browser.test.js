@@ -145,7 +145,7 @@ test("real Chromium traverses the fail-closed proxy: declared page renders, redi
       .find(capture=>capture.response.status===302 && /api\/redirect/.test(capture.request.url));
     assert.ok(redirectEvidence,"the 302 hop must exist as redacted evidence citing the redirect request");
 
-    // prompt-injection content: hostile page renders, injection text is page-side only,
+    // content-redaction gate: hostile text renders, directives persist as page data,
     // and the persisted evidence keeps the directive text while redacting identity secrets
     const injectUrl=`http://127.0.0.1:${fixturePort}/api/inject`;
     await cdp.send("Page.navigate",{url:injectUrl});
