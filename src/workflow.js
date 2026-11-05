@@ -261,7 +261,27 @@ export async function mapEngagement(store, manifest, { identityId, model } = {})
     }
     store.finishTask(taskId,"completed");
   } catch(error) { store.finishTask(taskId,"failed"); throw error; }
-  return { taskId, discovered: [...probes.keys()], probes:[...probes.values()] };
+  const sourceCitations = citationSlice(store, manifest);
+  return { taskId, discovered: [...probes.keys()], probes:[...probes.values()], sourceCitations };
+}
+
+// Bounded source-assisted citations: declared source roots get a small,
+// alphabetical, text-only read so hypothesis planning can pin code to map
+// observations. Duplicates collapse by digest.
+const TEXT_SOURCE_SUFFIX = /\.(js|ts|mjs|cjs|py|md|json|ya?ml|html|txt)$/i;
+function citationSlice(store, manifest, { perSource = 5 } = {}) {
+  const citations = []; const seenDigests = new Set();
+  for (const source of manifest.sources || []) {
+    let root; try { root = fs.realpathSync(source.root_absolute); } catch { continue; }
+    const files = fs.readdirSync(root,{ withFileTypes:true }).filter(entry=>entry.isFile() && TEXT_SOURCE_SUFFIX.test(entry.name)).map(entry=>entry.name).sort();
+    for (const file of files.slice(0,perSource)) {
+      const citation = readSource(store, manifest, { sourceId: source.id, path: file });
+      if (seenDigests.has(citation.digest)) { store.db.prepare("DELETE FROM observation WHERE id=?").run(citation.observationId); continue; }
+      seenDigests.add(citation.digest);
+      citations.push({ source: source.id, file, evidenceId: citation.evidenceId, observationId: citation.observationId });
+    }
+  }
+  return citations;
 }
 
 // Deterministic benchmark of the authorization playbook against a labeled

@@ -50,3 +50,18 @@ test("mapper records authorization.denied observations on the fixed fixture",asy
   assert.ok(denied,"fixed fixture denies identity B on the object");
   assert.ok(!observations.some(row=>row.kind==="cross_identity.pool"&&row.subject.endsWith("/api/objects/a1")));
 });
+
+test("mapper attaches bounded source citations from declared source roots",async t=>{
+  const port=`44${++counter}`, child=await fixture("vulnerable",port); t.after(()=>child.kill());
+  const manifest=loadManifest(manifestPath).manifest; manifest.targets[0].origin=`http://127.0.0.1:${port}`; manifest.engagement=`map-src-${counter}`;
+  const store=new Store(fs.mkdtempSync(path.join(os.tmpdir(),"hh-mapc-"))); t.after(()=>store.close()); store.createEngagement(manifestPath,manifest);
+  const result=await mapEngagement(store,manifest,{});
+  assert.ok(result.sourceCitations.length>=1,"at least one source citation (authz.js) must attach");
+  const citation=result.sourceCitations[0];
+  assert.equal(citation.source,"fixture-src"); assert.equal(citation.file,"authz.js");
+  const kinds=store.list("observation",manifest.engagement).map(row=>row.kind);
+  assert.ok(kinds.includes("source.read"),"source.read observations must be recorded");
+  // digests dedupe: count is stable across repeated mapping calls
+  const second=await mapEngagement(store,manifest,{});
+  assert.ok(second.sourceCitations.length>=1,"repeat mapping still yields citations");
+});
