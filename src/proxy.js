@@ -121,5 +121,9 @@ export function startProxy(store, manifest, { port, identityId } = {}) {
       reject(response, 403, error.message);
     }
   });
-  return new Promise(resolve => server.listen(port, "127.0.0.1", () => resolve({ server, lease, close: async () => { store.claimCompletion(lease, "completed"); await new Promise(done=>server.close(done)); } })));
+  return new Promise(resolve => server.listen(port, "127.0.0.1", () => {
+    const boundPort = server.address().port;
+    if (!Number.isInteger(boundPort) || boundPort <= 0) { reject(new Error("Proxy could not bind a usable port")); return; }
+    resolve({ server, lease, close: async () => { store.claimCompletion(lease, "completed"); await new Promise(done=>server.close(done)); }, port: boundPort });
+  }));
 }

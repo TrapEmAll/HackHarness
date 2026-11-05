@@ -19,5 +19,5 @@ const server=http.createServer((request,response)=>{
   if(mode==="fixed"&&object.owner!==identity.id){finish(403,JSON.stringify({error:"forbidden"}));return;}
   finish(200,JSON.stringify(object));
 });
-server.listen(port,"127.0.0.1",()=>console.log(JSON.stringify({ready:true,mode,port})));
+server.listen(port,"127.0.0.1",()=>console.log(JSON.stringify({ready:true,mode,port:server.address().port})));
 for(const signal of ["SIGTERM","SIGINT"])process.on(signal,()=>server.close(()=>process.exit(0)));
